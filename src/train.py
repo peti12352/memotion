@@ -306,8 +306,14 @@ def main(args):
 
     # Load datasets
     logger.info("Loading datasets...")
-    train_dataset = MemeDataset(split="train")
-    val_dataset = MemeDataset(split="val")
+    train_dataset = MemeDataset(
+        split="train",
+        kaggle_dataset_path=args.kaggle_dataset_path
+    )
+    val_dataset = MemeDataset(
+        split="val",
+        kaggle_dataset_path=args.kaggle_dataset_path
+    )
     logger.info(f"Train dataset size: {len(train_dataset)}")
     logger.info(f"Validation dataset size: {len(val_dataset)}")
 

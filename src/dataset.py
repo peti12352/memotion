@@ -60,6 +60,22 @@ class MemeDataset(Dataset):
             # Set path to images directory and labels file
             self.images_dir = os.path.join(self.base_dir, "images")
             self.labels_path = os.path.join(self.base_dir, "labels.csv")
+
+            # Print paths for debugging
+            print(f"Base directory: {self.base_dir}")
+            print(f"Images directory: {self.images_dir}")
+            print(f"Labels path: {self.labels_path}")
+
+            # Verify paths exist
+            if not os.path.exists(self.images_dir):
+                raise FileNotFoundError(
+                    f"Images directory not found at {self.images_dir}"
+                )
+
+            if not os.path.exists(self.labels_path):
+                raise FileNotFoundError(
+                    f"Labels file not found at {self.labels_path}"
+                )
         else:
             # Use default paths
             if data_dir is None:
@@ -70,16 +86,16 @@ class MemeDataset(Dataset):
                 labels_file or os.path.join(self.base_dir, "labels.csv")
             )
 
-        # Verify paths exist
-        if not os.path.exists(self.images_dir):
-            raise FileNotFoundError(
-                f"Images directory not found at {self.images_dir}"
-            )
+            # Verify paths exist
+            if not os.path.exists(self.images_dir):
+                raise FileNotFoundError(
+                    f"Images directory not found at {self.images_dir}"
+                )
 
-        if not os.path.exists(self.labels_path):
-            raise FileNotFoundError(
-                f"Labels file not found at {self.labels_path}"
-            )
+            if not os.path.exists(self.labels_path):
+                raise FileNotFoundError(
+                    f"Labels file not found at {self.labels_path}"
+                )
 
         # Load and preprocess labels
         self.full_df = pd.read_csv(self.labels_path)
