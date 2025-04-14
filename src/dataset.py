@@ -203,22 +203,22 @@ class MemeDataset(Dataset):
             else img_name
         )
 
-        if not os.path.exists(img_path):
-            logger.warning(
-                "Image not found: %s. Possible issues: "
-                "1) Run download_data.py first, "
-                "2) Check file permissions. "
-                "Using placeholder image.",
-                img_path
-            )
-            # Placeholder black image
-            img = Image.new('RGB', IMAGE_SIZE, color='black')
-        else:
+        try:
+            # Try to open and convert the image
             img = Image.open(img_path).convert("RGB")
 
-        # Apply any custom transforms if specified
-        if self.transform:
-            img = self.transform(img)
+            # Apply any custom transforms if specified
+            if self.transform:
+                img = self.transform(img)
+        except (OSError, IOError) as e:
+            logger.warning(
+                f"Error loading image {img_path}: {str(e)}. "
+                "Using placeholder image."
+            )
+            # Create a placeholder black image
+            img = Image.new('RGB', IMAGE_SIZE, color='black')
+            if self.transform:
+                img = self.transform(img)
 
         # Get text - use corrected text if available, else use OCR text
         if ("text_corrected" in self.labels_df.columns and
