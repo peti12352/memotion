@@ -13,15 +13,18 @@ EMOTION_CLASSES = [
     "motivation",
     "neutral"
 ]
+NUM_CLASSES = len(EMOTION_CLASSES)
 
 # Training configuration
 BATCH_SIZE = 32
 LEARNING_RATE = 2e-4
 NUM_EPOCHS = 10
+NUM_WORKERS = 2  # Number of workers for data loading
 
 # Paths
-MODEL_SAVE_DIR = Path("/kaggle/working/outputs/models")
-MODEL_SAVE_DIR.mkdir(parents=True, exist_ok=True)
+MODELS_DIR = Path("/kaggle/working/outputs/models")
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+MODEL_NAME = "meme_emotion_model"
 
 # Ensure DATA_DIR exists
 DATA_DIR.mkdir(parents=True, exist_ok=True)

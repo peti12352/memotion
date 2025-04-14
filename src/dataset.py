@@ -34,7 +34,7 @@ class MemeDataset(Dataset):
             val_ratio (float): Percentage of data to use for validation
             test_ratio (float): Percentage of data to use for testing
             seed (int): Random seed for reproducibility
-            kaggle_dataset_path (str, optional): Path to Kaggle dataset 
+            kaggle_dataset_path (str, optional): Path to Kaggle dataset
                 from kagglehub. If provided, uses this instead of DATA_DIR
         """
         self.split = split
@@ -51,10 +51,11 @@ class MemeDataset(Dataset):
         if kaggle_dataset_path is not None:
             self.base_dir = kaggle_dataset_path
 
-            # For kagglehub downloads, check for memotion_dataset_7k subdirectory
-            if os.path.exists(os.path.join(self.base_dir, "memotion_dataset_7k")):
-                self.base_dir = os.path.join(
-                    self.base_dir, "memotion_dataset_7k")
+            # For kagglehub downloads, check for
+            # memotion_dataset_7k subdirectory
+            memotion_path = os.path.join(self.base_dir, "memotion_dataset_7k")
+            if os.path.exists(memotion_path):
+                self.base_dir = memotion_path
 
             # Set path to images directory and labels file
             self.images_dir = os.path.join(self.base_dir, "images")
