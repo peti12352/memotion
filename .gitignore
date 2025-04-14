@@ -15,6 +15,7 @@ build/
 venv/
 env/
 .env
+.cursorrules
 
 # Data and models
 data/
