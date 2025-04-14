@@ -79,6 +79,10 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     if isinstance(targets, torch.Tensor):
         targets = targets.cpu().numpy()
 
+    # Ensure both arrays are of type int for sklearn metrics
+    predictions = predictions.astype(int)
+    targets = targets.astype(int)
+
     # Calculate metrics for each class
     precision = precision_score(
         targets, predictions, average='samples', zero_division=0)
