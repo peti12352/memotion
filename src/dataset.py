@@ -254,7 +254,7 @@ class MemeDataset(Dataset):
             self.labels_df.iloc[idx]["offense"],
             self.labels_df.iloc[idx]["motivation"],
             self.labels_df.iloc[idx]["neutral"]
-        ], dtype=torch.float32).reshape(1, -1)  # Reshape to (1, num_classes)
+        ], dtype=torch.float32)  # Shape will be (num_classes,)
 
         return {
             "image": image_inputs["pixel_values"].squeeze(0),
