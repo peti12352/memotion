@@ -17,7 +17,7 @@ EMOTION_CLASSES = [
 # Training configuration
 BATCH_SIZE = 32
 LEARNING_RATE = 2e-4
-EPOCHS = 10
+NUM_EPOCHS = 10
 
 # Paths
 MODEL_SAVE_DIR = Path("/kaggle/working/outputs/models")
