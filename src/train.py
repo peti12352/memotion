@@ -207,7 +207,7 @@ def train(
             # Track loss and predictions
             train_loss += loss.item() * gradient_accumulation_steps
 
-            # Apply sigmoid to get probabilities
+            # Apply sigmoid to get probabilities and ensure correct shape
             preds = torch.sigmoid(outputs).detach()
             all_train_preds.append(preds.cpu())
             all_train_targets.append(targets.cpu())
@@ -222,9 +222,13 @@ def train(
         all_train_preds = torch.cat(all_train_preds)
         all_train_targets = torch.cat(all_train_targets)
 
-        # Reshape predictions and targets to match sklearn's expected format
-        all_train_preds = all_train_preds.reshape(-1, NUM_CLASSES)
-        all_train_targets = all_train_targets.reshape(-1, NUM_CLASSES)
+        # Ensure predictions and targets have shape (num_samples, num_classes)
+        if len(all_train_preds.shape) == 1:
+            # Add dimension at the end
+            all_train_preds = all_train_preds.unsqueeze(-1)
+        if len(all_train_targets.shape) == 1:
+            # Add dimension at the end
+            all_train_targets = all_train_targets.unsqueeze(-1)
 
         # Convert to numpy arrays
         all_train_preds = all_train_preds.numpy()
@@ -255,7 +259,7 @@ def train(
                 # Track loss and predictions
                 val_loss += loss.item()
 
-                # Apply sigmoid to get probabilities
+                # Apply sigmoid to get probabilities and ensure correct shape
                 preds = torch.sigmoid(outputs)
                 all_val_preds.append(preds.cpu())
                 all_val_targets.append(targets.cpu())
@@ -265,9 +269,13 @@ def train(
         all_val_preds = torch.cat(all_val_preds)
         all_val_targets = torch.cat(all_val_targets)
 
-        # Reshape predictions and targets to match sklearn's expected format
-        all_val_preds = all_val_preds.reshape(-1, NUM_CLASSES)
-        all_val_targets = all_val_targets.reshape(-1, NUM_CLASSES)
+        # Ensure predictions and targets have shape (num_samples, num_classes)
+        if len(all_val_preds.shape) == 1:
+            # Add dimension at the end
+            all_val_preds = all_val_preds.unsqueeze(-1)
+        if len(all_val_targets.shape) == 1:
+            # Add dimension at the end
+            all_val_targets = all_val_targets.unsqueeze(-1)
 
         # Convert to numpy arrays
         all_val_preds = all_val_preds.numpy()
