@@ -70,6 +70,7 @@ class FocalLoss(nn.Module):
 
 def calculate_metrics(predictions, targets, threshold=0.5):
     """Calculate various metrics for multi-label classification"""
+    # Convert predictions to binary using threshold
     predictions = predictions > threshold
 
     # Convert tensors to numpy arrays if needed
@@ -78,20 +79,18 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     if isinstance(targets, torch.Tensor):
         targets = targets.cpu().numpy()
 
-    # Calculate metrics
-    acc = accuracy_score(targets, predictions)
+    # Calculate metrics for each class
     precision = precision_score(
-        targets, predictions, average='macro', zero_division=0
-    )
-    recall = recall_score(
-        targets, predictions, average='macro', zero_division=0
-    )
-    f1 = f1_score(
-        targets, predictions, average='macro', zero_division=0
-    )
+        targets, predictions, average='samples', zero_division=0)
+    recall = recall_score(targets, predictions,
+                          average='samples', zero_division=0)
+    f1 = f1_score(targets, predictions, average='samples', zero_division=0)
+
+    # Calculate accuracy (exact match ratio)
+    accuracy = accuracy_score(targets, predictions)
 
     return {
-        "accuracy": acc,
+        "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
         "f1": f1
