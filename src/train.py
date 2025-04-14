@@ -371,44 +371,28 @@ def main(args):
     return best_val_f1
 
 
-if __name__ == "__main__":
+def parse_args():
     parser = argparse.ArgumentParser(
-        description="Train meme emotion recognition model")
+        description="Train the meme emotion recognition model")
+    parser.add_argument("--batch_size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--epochs", type=int, default=NUM_EPOCHS)
+    parser.add_argument("--learning_rate", type=float, default=LEARNING_RATE)
+    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--warmup_ratio", type=float, default=0.1)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
+    parser.add_argument("--patience", type=int, default=3)
+    parser.add_argument("--focal_alpha", type=float, default=0.25)
+    parser.add_argument("--focal_gamma", type=float, default=2.0)
+    parser.add_argument("--fp16", action="store_true")
+    parser.add_argument("--model_dir", type=str, default=str(MODELS_DIR))
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--kaggle_dataset_path", type=str,
+                        help="Path to Kaggle dataset")
+    parser.add_argument("--output_dir", type=str,
+                        help="Directory to save outputs")
+    return parser.parse_args()
 
-    # Training parameters
-    parser.add_argument("--batch_size", type=int,
-                        default=BATCH_SIZE, help="Training batch size")
-    parser.add_argument("--epochs", type=int,
-                        default=NUM_EPOCHS, help="Number of training epochs")
-    parser.add_argument("--learning_rate", type=float,
-                        default=LEARNING_RATE, help="Learning rate")
-    parser.add_argument("--weight_decay", type=float,
-                        default=1e-2, help="Weight decay for AdamW")
-    parser.add_argument("--warmup_ratio", type=float,
-                        default=0.1, help="Ratio of warmup steps")
-    parser.add_argument("--gradient_accumulation_steps",
-                        type=int, default=1, help="Gradient accumulation steps")
-    parser.add_argument("--patience", type=int, default=3,
-                        help="Early stopping patience")
 
-    # Focal loss parameters
-    parser.add_argument("--focal_alpha", type=float,
-                        default=0.25, help="Focal loss alpha parameter")
-    parser.add_argument("--focal_gamma", type=float,
-                        default=2.0, help="Focal loss gamma parameter")
-
-    # Mixed precision
-    parser.add_argument("--fp16", action="store_true",
-                        help="Enable mixed precision training")
-
-    # Model saving
-    parser.add_argument("--model_dir", type=str,
-                        default=str(MODELS_DIR), help="Directory to save model")
-
-    # Reproducibility
-    parser.add_argument("--seed", type=int, default=42,
-                        help="Random seed for reproducibility")
-
-    args = parser.parse_args()
-
+if __name__ == "__main__":
+    args = parse_args()
     main(args)
