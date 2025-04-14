@@ -222,7 +222,11 @@ def train(
         all_train_preds = torch.cat(all_train_preds)
         all_train_targets = torch.cat(all_train_targets)
 
-        # Ensure both predictions and targets are in the same format
+        # Reshape predictions and targets to match sklearn's expected format
+        all_train_preds = all_train_preds.reshape(-1, NUM_CLASSES)
+        all_train_targets = all_train_targets.reshape(-1, NUM_CLASSES)
+
+        # Convert to numpy arrays
         all_train_preds = all_train_preds.numpy()
         all_train_targets = all_train_targets.numpy()
 
@@ -261,7 +265,11 @@ def train(
         all_val_preds = torch.cat(all_val_preds)
         all_val_targets = torch.cat(all_val_targets)
 
-        # Ensure both predictions and targets are in the same format
+        # Reshape predictions and targets to match sklearn's expected format
+        all_val_preds = all_val_preds.reshape(-1, NUM_CLASSES)
+        all_val_targets = all_val_targets.reshape(-1, NUM_CLASSES)
+
+        # Convert to numpy arrays
         all_val_preds = all_val_preds.numpy()
         all_val_targets = all_val_targets.numpy()
 
