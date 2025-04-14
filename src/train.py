@@ -221,6 +221,11 @@ def train(
         train_loss /= len(train_loader)
         all_train_preds = torch.cat(all_train_preds)
         all_train_targets = torch.cat(all_train_targets)
+
+        # Ensure both predictions and targets are in the same format
+        all_train_preds = all_train_preds.numpy()
+        all_train_targets = all_train_targets.numpy()
+
         train_metrics = calculate_metrics(all_train_preds, all_train_targets)
 
         # Validation phase
@@ -255,6 +260,11 @@ def train(
         val_loss /= len(val_loader)
         all_val_preds = torch.cat(all_val_preds)
         all_val_targets = torch.cat(all_val_targets)
+
+        # Ensure both predictions and targets are in the same format
+        all_val_preds = all_val_preds.numpy()
+        all_val_targets = all_val_targets.numpy()
+
         val_metrics = calculate_metrics(all_val_preds, all_val_targets)
 
         # Log metrics

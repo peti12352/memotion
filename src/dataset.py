@@ -247,13 +247,14 @@ class MemeDataset(Dataset):
         )
 
         # Get labels for multi-label classification
+        # Convert to float32 to match model output type
         labels = torch.tensor([
             self.labels_df.iloc[idx]["amusement"],
             self.labels_df.iloc[idx]["sarcasm"],
             self.labels_df.iloc[idx]["offense"],
             self.labels_df.iloc[idx]["motivation"],
             self.labels_df.iloc[idx]["neutral"]
-        ], dtype=torch.float)
+        ], dtype=torch.float32)
 
         return {
             "image": image_inputs["pixel_values"].squeeze(0),
