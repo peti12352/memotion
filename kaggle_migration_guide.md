@@ -27,7 +27,7 @@ Using GitHub as an intermediary makes synchronization easier:
    git add .
    git commit -m "Initial commit"
    git branch -M main
-   git remote add origin https://github.com/your-username/meme_emotion.git
+   git remote add origin https://github.com/your-username/memotion.git
    git push -u origin main
    ```
 3. Create a `.gitignore` file to exclude data and models:
@@ -64,12 +64,76 @@ Add these cells to your notebook:
 
 ```python
 # Cell 1: Clone your GitHub repository
-!git clone https://github.com/your-username/meme_emotion.git
-%cd meme_emotion
+# First check if the directory already exists
+import os
+if os.path.exists('memotion'):
+    print("Directory already exists. Using existing directory.")
+    %cd memotion
+    # Optionally pull latest changes if it's a git repository
+    if os.path.exists('.git'):
+        !git pull
+else:
+    # Clone the repository if it doesn't exist
+    !git clone https://github.com/your-username/memotion.git
+    %cd memotion
 
 # Install required dependencies
 !pip install -r requirements.txt
 ```
+
+### Handling "Directory Already Exists" Error
+
+If you encounter a "fatal: destination path already exists" error when trying to clone your repository, use this comprehensive solution:
+
+```python
+import os
+import shutil
+
+# Define the target directory
+target_dir = "/kaggle/working/memotion"
+
+# Check if directory exists
+if os.path.exists(target_dir):
+    print(f"Directory {target_dir} already exists.")
+
+    # Check if it's a git repository
+    if os.path.exists(os.path.join(target_dir, '.git')):
+        print("Directory is a git repository. Pulling latest changes...")
+        %cd {target_dir}
+        !git pull
+    else:
+        print("Directory is not a git repository. Creating backup and cloning fresh...")
+        # Create backup of existing directory
+        backup_dir = f"{target_dir}_backup"
+        if os.path.exists(backup_dir):
+            shutil.rmtree(backup_dir)
+        shutil.move(target_dir, backup_dir)
+        print(f"Backed up existing directory to {backup_dir}")
+
+        # Clone fresh
+        !git clone https://github.com/your-username/memotion.git {target_dir}
+        %cd {target_dir}
+else:
+    print(f"Directory {target_dir} does not exist. Cloning fresh...")
+    !git clone https://github.com/your-username/memotion.git {target_dir}
+    %cd {target_dir}
+
+# Verify we're in the correct directory
+print(f"Current working directory: {os.getcwd()}")
+```
+
+This solution provides three possible outcomes:
+
+1. If the directory exists and is a git repository: Pulls the latest changes
+2. If the directory exists but isn't a git repository: Creates a backup and clones fresh
+3. If the directory doesn't exist: Clones fresh
+
+The script also:
+
+- Preserves existing work by creating backups when needed
+- Provides clear feedback about what actions are being taken
+- Verifies the final working directory
+- Handles edge cases like backup directory already existing
 
 ## 5. Access the Memotion Dataset with KaggleHub
 
@@ -203,11 +267,11 @@ Add a cell to save and download your trained models:
 
 # Create a link to download the final model
 from IPython.display import FileLink
-FileLink(r'/kaggle/working/outputs/models/meme_emotion_model.pth')
+FileLink(r'/kaggle/working/outputs/models/memotion_model.pth')
 
 # Optionally compress for easier download
-!tar -czvf /kaggle/working/meme_emotion_models.tar.gz /kaggle/working/outputs/models/
-FileLink(r'/kaggle/working/meme_emotion_models.tar.gz')
+!tar -czvf /kaggle/working/memotion_models.tar.gz /kaggle/working/outputs/models/
+FileLink(r'/kaggle/working/memotion_models.tar.gz')
 ```
 
 ## 9. Hugging Face Integration (Optional)
@@ -228,7 +292,7 @@ api = HfApi()
 
 api.upload_folder(
     folder_path="/kaggle/working/outputs/models/",
-    repo_id="your-username/meme-emotion-model",
+    repo_id="your-username/memotion-model",
     repo_type="model"
 )
 ```
