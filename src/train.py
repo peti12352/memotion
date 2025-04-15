@@ -19,7 +19,7 @@ from .dataset import MemeDataset
 from .model import MemeEmotionModel
 from .config import (
     BATCH_SIZE, NUM_EPOCHS, LEARNING_RATE, NUM_WORKERS,
-    MODELS_DIR, MODEL_NAME, NUM_CLASSES
+    MODELS_DIR, MODEL_NAME, NUM_CLASSES, EMOTION_CLASSES
 )
 
 # Configure logging
@@ -354,19 +354,31 @@ def main(args):
     model_dir.mkdir(parents=True, exist_ok=True)
     model_save_path = model_dir / f"{MODEL_NAME}.pt"
 
+    # Dataset split configuration
+    splits_dir = Path(args.output_dir) / "splits" if args.output_dir else None
+    if splits_dir:
+        splits_dir.mkdir(exist_ok=True, parents=True)
+        splits_file = splits_dir / "dataset_splits.json"
+    else:
+        splits_file = None
+
     # Load datasets
     logger.info("Loading datasets...")
     train_dataset = MemeDataset(
         split="train",
-        kaggle_dataset_path=args.kaggle_dataset_path
+        kaggle_dataset_path=args.kaggle_dataset_path,
+        fixed_split_file=args.fixed_split_file,
+        save_splits_to=str(splits_file) if splits_file else None
     )
     val_dataset = MemeDataset(
         split="val",
-        kaggle_dataset_path=args.kaggle_dataset_path
+        kaggle_dataset_path=args.kaggle_dataset_path,
+        fixed_split_file=args.fixed_split_file
     )
     test_dataset = MemeDataset(
         split="test",
-        kaggle_dataset_path=args.kaggle_dataset_path
+        kaggle_dataset_path=args.kaggle_dataset_path,
+        fixed_split_file=args.fixed_split_file
     )
     logger.info(f"Train dataset size: {len(train_dataset)}")
     logger.info(f"Validation dataset size: {len(val_dataset)}")
@@ -524,6 +536,53 @@ def main(args):
 
     logger.info(f"Test metrics saved to {metrics_path}")
 
+    # Create a comprehensive model card with all metrics
+    from datetime import datetime
+    model_card = {
+        "model_name": MODEL_NAME,
+        "training_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "training_parameters": vars(args),
+        "metrics": {
+            "training": {
+                "loss": float(checkpoint['train_loss']),
+                "accuracy": float(checkpoint['train_metrics']["accuracy"]),
+                "precision": float(checkpoint['train_metrics']["precision"]),
+                "recall": float(checkpoint['train_metrics']["recall"]),
+                "f1": float(checkpoint['train_metrics']["f1"])
+            },
+            "validation": {
+                "loss": float(checkpoint['val_loss']),
+                "accuracy": float(checkpoint['val_metrics']["accuracy"]),
+                "precision": float(checkpoint['val_metrics']["precision"]),
+                "recall": float(checkpoint['val_metrics']["recall"]),
+                "f1": float(checkpoint['val_metrics']["f1"])
+            },
+            "test": {
+                "loss": float(test_loss),
+                "accuracy": float(test_metrics["accuracy"]),
+                "precision": float(test_metrics["precision"]),
+                "recall": float(test_metrics["recall"]),
+                "f1": float(test_metrics["f1"])
+            }
+        },
+        "emotion_classes": EMOTION_CLASSES,
+        "per_class_test_metrics": {
+            emotion: {
+                "precision": float(test_metrics["per_class"][f"class_{i}"]["precision"]),
+                "recall": float(test_metrics["per_class"][f"class_{i}"]["recall"]),
+                "f1": float(test_metrics["per_class"][f"class_{i}"]["f1"])
+            }
+            for i, emotion in enumerate(EMOTION_CLASSES)
+        }
+    }
+
+    # Save the model card
+    model_card_path = Path(args.output_dir) / f"{MODEL_NAME}_card.json" if args.output_dir else Path(f"{MODEL_NAME}_card.json")
+    with open(model_card_path, 'w') as f:
+        json.dump(model_card, f, indent=2)
+
+    logger.info(f"Model card saved to {model_card_path}")
+
     return best_val_f1
 
 
@@ -546,6 +605,8 @@ def parse_args():
                         help="Path to Kaggle dataset")
     parser.add_argument("--output_dir", type=str,
                         help="Directory to save outputs")
+    parser.add_argument("--fixed_split_file", type=str,
+                        help="Path to fixed split file")
     return parser.parse_args()
 
 

@@ -119,6 +119,56 @@ def calibrate_probabilities(probs, method='none', temperature=1.0):
     return probs
 
 
+def preprocess_image_and_text(image_path, text=None):
+    """
+    Process image and text using the same pipeline as training
+    to ensure consistency
+    """
+    # Get processor and tokenizer
+    clip_processor, tokenizer = get_processor_and_tokenizer()
+
+    # Process image - same as in dataset.py
+    try:
+        img = Image.open(image_path)
+
+        # Handle transparency in the same way as dataset.py
+        if img.mode == 'RGBA':
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        elif 'transparency' in img.info:
+            img = img.convert('RGBA')
+            background = Image.new('RGB', img.size, (255, 255, 255))
+            background.paste(img, mask=img.split()[3])
+            img = background
+        else:
+            img = img.convert("RGB")
+    except Exception as e:
+        logger.warning(f"Error loading image {image_path}: {str(e)}. Using placeholder.")
+        img = Image.new('RGB', (224, 224), color='black')
+
+    # Process image with CLIP processor - same as in dataset.py
+    image_inputs = clip_processor(
+        images=img,
+        return_tensors="pt",
+        padding=True
+    )
+
+    # Process text - same as in dataset.py
+    if text is None:
+        text = ""
+
+    text_inputs = tokenizer(
+        text,
+        max_length=128,
+        padding="max_length",
+        truncation=True,
+        return_tensors="pt"
+    )
+
+    return image_inputs, text_inputs
+
+
 def predict_emotion(image_path, model_path, text=None, fp16=False,
                     calibration='temperature', temperature=2.0):
     """
@@ -137,29 +187,11 @@ def predict_emotion(image_path, model_path, text=None, fp16=False,
     """
     # Load model and processors
     model, device = load_model(model_path)
-    clip_processor, tokenizer = get_processor_and_tokenizer()
 
     start_time = time.time()
 
-    # Load and process image
-    img = Image.open(image_path).convert("RGB")
-    image_inputs = clip_processor(
-        images=img,
-        return_tensors="pt",
-        padding=True
-    )
-
-    # Process text (use empty string if none provided)
-    if text is None:
-        text = ""
-
-    text_inputs = tokenizer(
-        text,
-        max_length=128,
-        padding="max_length",
-        truncation=True,
-        return_tensors="pt"
-    )
+    # Process image and text consistently with dataset.py
+    image_inputs, text_inputs = preprocess_image_and_text(image_path, text)
 
     # Prepare inputs for the model
     images = image_inputs["pixel_values"].to(device)

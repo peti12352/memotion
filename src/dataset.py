@@ -22,7 +22,9 @@ class MemeDataset(Dataset):
         val_ratio=0.1,
         test_ratio=0.1,
         seed=42,
-        kaggle_dataset_path=None
+        kaggle_dataset_path=None,
+        fixed_split_file=None,
+        save_splits_to=None
     ):
         """Initialize a MemeDataset instance.
 
@@ -36,9 +38,15 @@ class MemeDataset(Dataset):
             seed (int): Random seed for reproducibility
             kaggle_dataset_path (str, optional): Path to Kaggle dataset
                 from kagglehub. If provided, uses this instead of DATA_DIR
+            fixed_split_file (str, optional): Path to a JSON file with
+                predefined train/val/test splits for reproducibility
+            save_splits_to (str, optional): Path to save generated splits
+                for future reproducibility
         """
         self.split = split
         self.transform = transform
+        self.fixed_split_file = fixed_split_file
+        self.save_splits_to = save_splits_to
 
         # Load tokenizer for text processing
         self.tokenizer = AutoTokenizer.from_pretrained("roberta-base")
@@ -102,7 +110,7 @@ class MemeDataset(Dataset):
 
         # Create train/val/test split if not already done
         np.random.seed(seed)
-        self._create_splits(val_ratio, test_ratio)
+        self._create_splits(val_ratio, test_ratio, self.fixed_split_file)
 
         # Select the appropriate split
         if split == "train":
@@ -119,26 +127,59 @@ class MemeDataset(Dataset):
 
         print(f"Loaded {len(self.labels_df)} samples for {split} split")
 
-    def _create_splits(self, val_ratio, test_ratio):
-        """Create train/val/test splits from full dataset"""
+    def _create_splits(self, val_ratio, test_ratio, fixed_split_file=None):
+        """Create train/val/test splits from full dataset
+
+        Args:
+            val_ratio: Ratio of validation data
+            test_ratio: Ratio of test data
+            fixed_split_file: Optional path to a JSON file containing predefined splits
+        """
         # Convert text labels to numerical values
         self._preprocess_labels()
 
-        # Get indices for all samples
-        indices = np.arange(len(self.full_df))
+        # If fixed split file is provided, use it
+        if fixed_split_file and os.path.exists(fixed_split_file):
+            logger.info(f"Using fixed splits from {fixed_split_file}")
+            with open(fixed_split_file, 'r') as f:
+                import json
+                splits = json.load(f)
 
-        # Shuffle indices
-        np.random.shuffle(indices)
+            train_indices = splits['train']
+            val_indices = splits['val']
+            test_indices = splits['test']
 
-        # Calculate split sizes
-        test_size = int(len(indices) * test_ratio)
-        val_size = int(len(indices) * val_ratio)
-        train_size = len(indices) - test_size - val_size
+            logger.info(f"Loaded fixed splits - Train: {len(train_indices)}, "
+                        f"Val: {len(val_indices)}, Test: {len(test_indices)}")
+        else:
+            # Get indices for all samples
+            indices = np.arange(len(self.full_df))
 
-        # Create splits
-        train_indices = indices[:train_size]
-        val_indices = indices[train_size:train_size + val_size]
-        test_indices = indices[train_size + val_size:]
+            # Shuffle indices
+            np.random.shuffle(indices)
+
+            # Calculate split sizes
+            test_size = int(len(indices) * test_ratio)
+            val_size = int(len(indices) * val_ratio)
+            train_size = len(indices) - test_size - val_size
+
+            # Create splits
+            train_indices = indices[:train_size]
+            val_indices = indices[train_size:train_size + val_size]
+            test_indices = indices[train_size + val_size:]
+
+            # Save splits for reproducibility if requested
+            if hasattr(self, 'save_splits_to') and self.save_splits_to:
+                save_path = self.save_splits_to
+                logger.info(f"Saving splits to {save_path}")
+                os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                with open(save_path, 'w') as f:
+                    import json
+                    json.dump({
+                        'train': train_indices.tolist(),
+                        'val': val_indices.tolist(),
+                        'test': test_indices.tolist()
+                    }, f)
 
         # Create dataframes for each split
         self.train_df = self.full_df.iloc[train_indices].reset_index(drop=True)
