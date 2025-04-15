@@ -93,29 +93,70 @@ def calibrate_probabilities(probs, method='none', temperature=1.0):
 
     Methods:
         - 'none': No calibration
-        - 'temperature': Apply temperature scaling
+        - 'temperature': Apply temperature scaling (higher temp = more uniform)
         - 'softmax': Convert to mutual exclusive probabilities
         - 'top_only': Zero out all but the top prediction
+        - 'normalize': Scale probabilities to sum to 1.0
+        - 'threshold': Set values below threshold to 0, then normalize
     """
     if method == 'none':
         return probs
 
+    if method == 'normalize':
+        # Simple normalization to make values sum to 1.0
+        values = np.array(list(probs.values()))
+        total = np.sum(values)
+        if total > 0:
+            normalized = values / total
+        else:
+            normalized = values
+        return {k: float(normalized[i]) for i, k in enumerate(probs.keys())}
+
     if method == 'temperature':
-        # Temperature scaling (higher temp = more uniform)
-        scaled = {k: float(np.power(v, 1 / temperature)) for k, v in probs.items()}
-        return scaled
+        # Temperature scaling
+        # Lower temperature (< 1.0) = sharper distribution
+        # Higher temperature (> 1.0) = more uniform distribution
+        values = np.array(list(probs.values()))
+
+        # Apply temperature scaling
+        scaled = np.power(values, 1 / temperature)
+
+        # Also normalize to sum to 1.0 for better interpretability
+        total = np.sum(scaled)
+        if total > 0:
+            scaled = scaled / total
+
+        return {k: float(scaled[i]) for i, k in enumerate(probs.keys())}
 
     if method == 'softmax':
         # Convert to softmax (mutually exclusive classes)
         values = np.array(list(probs.values()))
+
+        # Apply temperature to control sharpness
         exp_probs = np.exp(values / temperature)
         softmax_probs = exp_probs / np.sum(exp_probs)
+
         return {k: float(softmax_probs[i]) for i, k in enumerate(probs.keys())}
+
+    if method == 'threshold':
+        # Apply threshold then normalize
+        threshold = 0.3  # Can be adjusted
+        values = np.array(list(probs.values()))
+        thresholded = np.where(values > threshold, values, 0)
+
+        # Normalize to sum to 1.0
+        total = np.sum(thresholded)
+        if total > 0:
+            normalized = thresholded / total
+        else:
+            normalized = thresholded
+
+        return {k: float(normalized[i]) for i, k in enumerate(probs.keys())}
 
     if method == 'top_only':
         # Only keep the top prediction
         top_class = max(probs.items(), key=lambda x: x[1])[0]
-        return {k: float(v if k == top_class else 0.0) for k, v in probs.items()}
+        return {k: float(1.0 if k == top_class else 0.0) for k, v in probs.items()}
 
     return probs
 
@@ -294,7 +335,7 @@ def main():
                         help="Path to save visualization")
     parser.add_argument("--fp16", action="store_true",
                         help="Use half precision for faster inference")
-    parser.add_argument("--calibration", type=str, choices=['none', 'temperature', 'softmax', 'top_only'],
+    parser.add_argument("--calibration", type=str, choices=['none', 'temperature', 'softmax', 'top_only', 'normalize', 'threshold'],
                         default='temperature', help="Probability calibration method")
     parser.add_argument("--temperature", type=float, default=2.0,
                         help="Temperature for probability scaling")
