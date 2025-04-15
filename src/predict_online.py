@@ -102,12 +102,13 @@ def calibrate_probabilities(probs, method='none', temperature=1.0):
 
     if method == 'temperature':
         # Temperature scaling (higher temp = more uniform)
-        scaled = np.power(probs, 1 / temperature)
+        scaled = {k: float(np.power(v, 1 / temperature)) for k, v in probs.items()}
         return scaled
 
     if method == 'softmax':
         # Convert to softmax (mutually exclusive classes)
-        exp_probs = np.exp(np.array(list(probs.values())) / temperature)
+        values = np.array(list(probs.values()))
+        exp_probs = np.exp(values / temperature)
         softmax_probs = exp_probs / np.sum(exp_probs)
         return {k: float(softmax_probs[i]) for i, k in enumerate(probs.keys())}
 
@@ -219,7 +220,7 @@ def predict_emotion(image_path, model_path, text=None, fp16=False,
 
     # Use half precision if requested
     if fp16 and device.type == 'cuda':
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast(device_type='cuda'):
             outputs = model(images, text_data)
     else:
         # Run inference with regular precision
