@@ -1,26 +1,44 @@
 import torch
 import torch.nn as nn
 from transformers import CLIPVisionModel, RobertaModel
+from .config import EMOTION_DIMS
 
 
 class MemeEmotionModel(nn.Module):
-    """Simplified multimodal model for meme emotion classification."""
+    """Multimodal model for meme emotion intensity classification (Task C)."""
 
-    def __init__(self, num_classes=5):
+    def __init__(self, freeze_ratio=0.85):
         super().__init__()
 
         # Vision encoder - only load vision part of CLIP to save memory
         self.vision_model = CLIPVisionModel.from_pretrained(
             "openai/clip-vit-base-patch32")
-        self.vision_model.eval()  # Set to eval mode to freeze batch norm layers
-        for param in self.vision_model.parameters():
-            param.requires_grad = False  # Freeze all vision parameters
 
-        # Text encoder
+        # Partially freeze the vision model (unfreeze the final layers)
+        total_layers = len(list(self.vision_model.parameters()))
+        frozen_layers = int(total_layers * freeze_ratio)
+
+        # Set all layers to trainable first
+        for param in self.vision_model.parameters():
+            param.requires_grad = True
+
+        # Freeze earlier layers according to the ratio
+        for i, param in enumerate(self.vision_model.parameters()):
+            if i < frozen_layers:
+                param.requires_grad = False
+
+        # Text encoder with partial unfreezing
         self.text_model = RobertaModel.from_pretrained("roberta-base")
-        self.text_model.eval()  # Set to eval mode
+
+        # Set last few layers to trainable
         for param in self.text_model.parameters():
-            param.requires_grad = False  # Freeze all text parameters
+            param.requires_grad = False
+
+        # Unfreeze the final encoder layers and pooler
+        for param in self.text_model.encoder.layer[-2:].parameters():
+            param.requires_grad = True
+        for param in self.text_model.pooler.parameters():
+            param.requires_grad = True
 
         # Projection layers to common embedding space
         self.vision_projection = nn.Linear(768, 512)
@@ -39,22 +57,27 @@ class MemeEmotionModel(nn.Module):
             nn.Softmax(dim=1)
         )
 
-        # Classifier
-        self.classifier = nn.Sequential(
+        # Multi-head emotion classifier for Task C
+        # Each emotion gets its own head with output size matching its scale
+        self.shared_features = nn.Sequential(
             nn.Linear(512, 256),
             nn.ReLU(),
-            nn.Dropout(0.2),
-            nn.Linear(256, num_classes)
+            nn.Dropout(0.3),
         )
 
+        # Create separate classifier heads for each emotion with appropriate sizes
+        self.classifier_heads = nn.ModuleList([
+            nn.Linear(256, dim) for dim in EMOTION_DIMS
+        ])
+
     def forward(self, images, text):
-        # Get image features
-        with torch.no_grad():
+        # Get image features - with partial gradient flow
+        with torch.set_grad_enabled(True):
             vision_outputs = self.vision_model(images)
             image_embeds = vision_outputs.pooler_output  # [batch_size, 768]
 
-        # Get text features
-        with torch.no_grad():
+        # Get text features - with partial gradient flow
+        with torch.set_grad_enabled(True):
             text_outputs = self.text_model(**text)
             text_embeds = text_outputs.pooler_output  # [batch_size, 768]
 
@@ -78,11 +101,45 @@ class MemeEmotionModel(nn.Module):
         weighted_text = text_features * weights[:, 1].unsqueeze(1)
 
         # Combine weighted features
-        multimodal_features = weighted_image + \
-            weighted_text  # [batch_size, 512]
+        multimodal_features = weighted_image + weighted_text  # [batch_size, 512]
 
-        # Classification
-        # [batch_size, num_classes]
-        logits = self.classifier(multimodal_features)
+        # Generate shared features
+        shared = self.shared_features(multimodal_features)  # [batch_size, 256]
 
-        return logits
+        # Apply each emotion classifier head and concatenate results
+        emotion_outputs = []
+        for head in self.classifier_heads:
+            emotion_outputs.append(head(shared))  # Each head output: [batch_size, emotion_scale]
+
+        # Two options for returning outputs:
+        # 1. Return list of separate emotion outputs (more structured)
+        # 2. Return concatenated outputs (compatible with existing code)
+
+        # Option 2: Concatenate all outputs for compatibility
+        # We'll convert to logits for each intensity level
+        return torch.cat(emotion_outputs, dim=1)  # [batch_size, sum(EMOTION_DIMS)]
+
+    def predict_intensities(self, images, text):
+        """Predict the intensity level for each emotion"""
+        # Forward pass to get logits
+        logits = self.forward(images, text)
+
+        # Split logits by emotion
+        start_idx = 0
+        intensity_predictions = []
+
+        for dim in EMOTION_DIMS:
+            # Get logits for this emotion
+            emotion_logits = logits[:, start_idx:start_idx + dim]
+
+            # Apply softmax to get probabilities for each intensity level
+            probs = torch.softmax(emotion_logits, dim=1)
+
+            # Get most likely intensity class
+            intensity = torch.argmax(probs, dim=1)
+
+            intensity_predictions.append(intensity)
+            start_idx += dim
+
+        # Stack to get [batch_size, num_emotions] tensor of predicted intensities
+        return torch.stack(intensity_predictions, dim=1)

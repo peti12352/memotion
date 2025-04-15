@@ -5,7 +5,7 @@ import pandas as pd
 import os
 import numpy as np
 from transformers import AutoTokenizer, CLIPProcessor
-from .config import DATA_DIR, MAX_TEXT_LENGTH, IMAGE_SIZE
+from .config import DATA_DIR, MAX_TEXT_LENGTH, IMAGE_SIZE, EMOTION_SCALES, EMOTION_NAMES
 import logging
 
 # Configure logging if not already configured
@@ -187,44 +187,61 @@ class MemeDataset(Dataset):
         self.test_df = self.full_df.iloc[test_indices].reset_index(drop=True)
 
     def _preprocess_labels(self):
-        """Convert label text to appropriate numerical values"""
-        # Map overall sentiment to -1, 0, 1
-        sentiment_map = {
-            'negative': 0, 'very negative': 0,
-            'neutral': 1,
-            'positive': 2, 'very positive': 2
-        }
-
+        """Convert label text to appropriate numerical values for Task C (emotion intensity)"""
         # Convert text columns to lowercase for consistent mapping
-        columns_to_convert = [
-            'humour', 'sarcasm', 'offensive',
-            'motivational', 'overall_sentiment'
-        ]
+        columns_to_convert = ['humour', 'sarcasm', 'offensive', 'motivational', 'overall_sentiment']
         for col in columns_to_convert:
             if col in self.full_df.columns:
                 self.full_df[col] = self.full_df[col].str.lower()
 
-        # Map overall sentiment (use non-negative values)
-        if 'overall_sentiment' in self.full_df.columns:
-            self.full_df['sentiment'] = self.full_df['overall_sentiment'].map(
-                sentiment_map)
+        # Task C - Map humour levels (0-3)
+        humor_map = {
+            'not funny': 0,
+            'funny': 1,
+            'very funny': 2,
+            'hilarious': 3
+        }
+        self.full_df['humour_intensity'] = self.full_df['humour'].map(
+            humor_map).fillna(0).astype(int)
 
-        # Create binary classification columns for Task B
-        self.full_df['amusement'] = self.full_df['humour'].apply(
-            lambda x: 0 if x == 'not funny' else 1)
+        # Task C - Map sarcasm levels (0-3)
+        sarcasm_map = {
+            'not sarcastic': 0,
+            'general': 1,
+            'twisted meaning': 2,
+            'very twisted': 3
+        }
+        self.full_df['sarcasm_intensity'] = self.full_df['sarcasm'].map(
+            sarcasm_map).fillna(0).astype(int)
 
-        self.full_df['sarcasm'] = self.full_df['sarcasm'].apply(
-            lambda x: 0 if x == 'not sarcastic' else 1)
+        # Task C - Map offensive levels (0-3)
+        offensive_map = {
+            'not offensive': 0,
+            'slight': 1,
+            'very offensive': 2,
+            'hateful offensive': 3
+        }
+        self.full_df['offensive_intensity'] = self.full_df['offensive'].map(
+            offensive_map).fillna(0).astype(int)
 
-        self.full_df['offense'] = self.full_df['offensive'].apply(
-            lambda x: 0 if x == 'not offensive' else 1)
+        # Task C - Map motivational (0-1)
+        motivational_map = {
+            'not motivational': 0,
+            'motivational': 1
+        }
+        self.full_df['motivational_intensity'] = self.full_df['motivational'].map(
+            motivational_map).fillna(0).astype(int)
 
-        self.full_df['motivation'] = self.full_df['motivational'].apply(
-            lambda x: 0 if x == 'not motivational' else 1)
+        # Create one-hot encoded columns for each intensity level
+        # This allows for ordinal classification where we predict probabilities for each level
+        for emotion in EMOTION_NAMES:
+            intensity_col = f"{emotion}_intensity"
+            max_scale = EMOTION_SCALES[emotion]
 
-        # Add neutral class (inverse of any other emotion)
-        has_emotion = (self.full_df['amusement'] | self.full_df['sarcasm'] | self.full_df['offense'] | self.full_df['motivation'])
-        self.full_df['neutral'] = (~has_emotion).astype(int)
+            # Create one-hot column for each level of intensity for this emotion
+            for level in range(max_scale):
+                col_name = f"{emotion}_{level}"
+                self.full_df[col_name] = (self.full_df[intensity_col] == level).astype(int)
 
     def __len__(self):
         return len(self.labels_df)
@@ -299,15 +316,23 @@ class MemeDataset(Dataset):
             return_tensors="pt"
         )
 
-        # Get labels for multi-label classification
-        # Create flat tensor of shape (num_classes,) to ensure consistency
-        labels = torch.tensor([
-            self.labels_df.iloc[idx]["amusement"],
-            self.labels_df.iloc[idx]["sarcasm"],
-            self.labels_df.iloc[idx]["offense"],
-            self.labels_df.iloc[idx]["motivation"],
-            self.labels_df.iloc[idx]["neutral"]
-        ], dtype=torch.float32)  # Shape is (5,)
+        # For Task C, we create the labels by concatenating each intensity one-hot vector
+        # For each emotion, we grab all of its one-hot encoded intensity levels and append them
+        label_tensors = []
+        for emotion in EMOTION_NAMES:
+            for level in range(EMOTION_SCALES[emotion]):
+                col_name = f"{emotion}_{level}"
+                label_tensors.append(float(self.labels_df.iloc[idx][col_name]))
+
+        # Convert to tensor - shape is (sum of all possible intensity levels)
+        labels = torch.tensor(label_tensors, dtype=torch.float32)
+
+        # Also include raw intensity levels for evaluation metrics
+        intensity_values = [
+            self.labels_df.iloc[idx][f"{emotion}_intensity"]
+            for emotion in EMOTION_NAMES
+        ]
+        intensity = torch.tensor(intensity_values, dtype=torch.long)
 
         return {
             "image": image_inputs["pixel_values"].squeeze(0),
@@ -315,5 +340,6 @@ class MemeDataset(Dataset):
                 "input_ids": text_inputs["input_ids"].squeeze(0),
                 "attention_mask": text_inputs["attention_mask"].squeeze(0)
             },
-            "labels": labels
+            "labels": labels,
+            "intensity": intensity  # Raw intensity values for evaluation
         }

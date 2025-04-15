@@ -1,11 +1,11 @@
 """
-Meme Emotion Prediction - Online Version (Optimized)
-This script uses the trained model to predict emotions in memes with improved performance.
+Meme Emotion Prediction (Task C) - Online Version
+This script uses the trained model to predict emotion intensities in memes.
 """
 import argparse
 import torch
 from PIL import Image
-import numpy as np
+import numpy as np  # Needed for working with arrays in visualization
 import logging
 from pathlib import Path
 import matplotlib.pyplot as plt
@@ -14,7 +14,7 @@ import time
 
 # Import the required components
 from .model import MemeEmotionModel
-from .config import EMOTION_CLASSES
+from .config import EMOTION_CLASSES, EMOTION_NAMES, EMOTION_DIMS
 from transformers import CLIPProcessor, RobertaTokenizer, logging as transformers_logging
 
 # Reduce verbosity of transformers
@@ -45,7 +45,7 @@ def load_model(model_path):
     checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
     # Initialize model
-    model = MemeEmotionModel(num_classes=len(EMOTION_CLASSES))
+    model = MemeEmotionModel()
 
     # Load weights
     if 'model_state_dict' in checkpoint:
@@ -85,80 +85,6 @@ def get_processor_and_tokenizer():
         logger.info(f"RoBERTa tokenizer loading took {elapsed:.2f} seconds")
 
     return _processor_cache, _tokenizer_cache
-
-
-def calibrate_probabilities(probs, method='none', temperature=1.0):
-    """
-    Calibrate model probabilities to be more interpretable
-
-    Methods:
-        - 'none': No calibration
-        - 'temperature': Apply temperature scaling (higher temp = more uniform)
-        - 'softmax': Convert to mutual exclusive probabilities
-        - 'top_only': Zero out all but the top prediction
-        - 'normalize': Scale probabilities to sum to 1.0
-        - 'threshold': Set values below threshold to 0, then normalize
-    """
-    if method == 'none':
-        return probs
-
-    if method == 'normalize':
-        # Simple normalization to make values sum to 1.0
-        values = np.array(list(probs.values()))
-        total = np.sum(values)
-        if total > 0:
-            normalized = values / total
-        else:
-            normalized = values
-        return {k: float(normalized[i]) for i, k in enumerate(probs.keys())}
-
-    if method == 'temperature':
-        # Temperature scaling
-        # Lower temperature (< 1.0) = sharper distribution
-        # Higher temperature (> 1.0) = more uniform distribution
-        values = np.array(list(probs.values()))
-
-        # Apply temperature scaling
-        scaled = np.power(values, 1 / temperature)
-
-        # Also normalize to sum to 1.0 for better interpretability
-        total = np.sum(scaled)
-        if total > 0:
-            scaled = scaled / total
-
-        return {k: float(scaled[i]) for i, k in enumerate(probs.keys())}
-
-    if method == 'softmax':
-        # Convert to softmax (mutually exclusive classes)
-        values = np.array(list(probs.values()))
-
-        # Apply temperature to control sharpness
-        exp_probs = np.exp(values / temperature)
-        softmax_probs = exp_probs / np.sum(exp_probs)
-
-        return {k: float(softmax_probs[i]) for i, k in enumerate(probs.keys())}
-
-    if method == 'threshold':
-        # Apply threshold then normalize
-        threshold = 0.3  # Can be adjusted
-        values = np.array(list(probs.values()))
-        thresholded = np.where(values > threshold, values, 0)
-
-        # Normalize to sum to 1.0
-        total = np.sum(thresholded)
-        if total > 0:
-            normalized = thresholded / total
-        else:
-            normalized = thresholded
-
-        return {k: float(normalized[i]) for i, k in enumerate(probs.keys())}
-
-    if method == 'top_only':
-        # Only keep the top prediction
-        top_class = max(probs.items(), key=lambda x: x[1])[0]
-        return {k: float(1.0 if k == top_class else 0.0) for k, v in probs.items()}
-
-    return probs
 
 
 def preprocess_image_and_text(image_path, text=None):
@@ -228,21 +154,18 @@ def preprocess_image_and_text(image_path, text=None):
     return image_inputs, text_inputs
 
 
-def predict_emotion(image_path, model_path, text=None, fp16=False,
-                    calibration='temperature', temperature=2.0):
+def predict_emotion_intensity(image_path, model_path, text=None, fp16=False):
     """
-    Predict emotions for a meme image
+    Predict emotion intensities for a meme image (Task C)
 
     Args:
         image_path: Path to the image
         model_path: Path to the model checkpoint
         text: Optional text from the meme
         fp16: Whether to use half precision
-        calibration: Probability calibration method
-        temperature: Temperature for scaling probabilities
 
     Returns:
-        Dictionary with emotion scores
+        Dictionary with emotion intensities and confidence scores
     """
     # Load model and processors
     model, device = load_model(model_path)
@@ -263,69 +186,137 @@ def predict_emotion(image_path, model_path, text=None, fp16=False,
     if fp16 and device.type == 'cuda':
         with torch.amp.autocast(device_type='cuda'):
             outputs = model(images, text_data)
+            intensity_preds = model.predict_intensities(images, text_data)
     else:
         # Run inference with regular precision
         with torch.no_grad():
             outputs = model(images, text_data)
-
-    # Get raw probabilities
-    probabilities = torch.sigmoid(outputs)
-
-    # Convert to dictionary of results
-    results = {}
-    for i, emotion in enumerate(EMOTION_CLASSES):
-        results[emotion] = float(probabilities[0, i])
-
-    # Apply calibration
-    calibrated_results = calibrate_probabilities(
-        results, method=calibration, temperature=temperature)
+            intensity_preds = model.predict_intensities(images, text_data)
 
     elapsed = time.time() - start_time
     logger.info(f"Prediction took {elapsed:.2f} seconds")
 
-    return calibrated_results
+    # Extract intensity predictions (values like 0, 1, 2, 3)
+    intensity_values = intensity_preds[0].cpu().numpy()
+
+    # Process the raw logits to get confidence scores for each intensity level
+    results = {}
+    start_idx = 0
+    for i, emotion in enumerate(EMOTION_NAMES):
+        # Get logits for this emotion's intensities
+        emotion_dim = EMOTION_DIMS[i]
+        emotion_logits = outputs[0, start_idx:start_idx + emotion_dim].cpu()
+
+        # Apply softmax to get probabilities for each intensity level
+        probs = torch.softmax(emotion_logits, dim=0).numpy()
+
+        # Get the predicted intensity level and its confidence
+        intensity_level = int(intensity_values[i])
+        confidence = float(probs[intensity_level])
+
+        # Map numeric intensity to text label
+        intensity_label = EMOTION_CLASSES[emotion][intensity_level]
+
+        # Store detailed results
+        results[emotion] = {
+            "intensity": intensity_level,
+            "label": intensity_label,
+            "confidence": confidence,
+            "probabilities": {
+                EMOTION_CLASSES[emotion][j]: float(probs[j])
+                for j in range(emotion_dim)
+            }
+        }
+
+        start_idx += emotion_dim
+
+    return results
 
 
-def visualize_prediction(image_path, results):
-    """Visualize image with prediction results"""
+def visualize_prediction(image_path, results, output_path=None):
+    """Visualize image with intensity prediction results"""
     # Load image
-    img = Image.open(image_path).convert("RGB")
+    try:
+        img = Image.open(image_path).convert("RGB")
+    except Exception:
+        img = Image.new('RGB', (224, 224), color='black')
 
-    # Create figure with two subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    # Create figure with multiple subplots
+    fig = plt.figure(figsize=(15, 10))
+    gs = fig.add_gridspec(2, 3)
 
-    # Display image
-    ax1.imshow(img)
-    ax1.set_title("Meme Image")
-    ax1.axis("off")
+    # Main image
+    ax_img = fig.add_subplot(gs[0, 0])
+    ax_img.imshow(img)
+    ax_img.set_title("Meme Image")
+    ax_img.axis("off")
 
-    # Display results as bar chart
-    emotions = list(results.keys())
-    scores = list(results.values())
+    # Create subplots for each emotion
+    axes = [
+        fig.add_subplot(gs[0, 1]),  # humor
+        fig.add_subplot(gs[0, 2]),  # sarcasm
+        fig.add_subplot(gs[1, 0]),  # offensive
+        fig.add_subplot(gs[1, 1]),  # motivational
+    ]
 
-    # Sort by score
-    sorted_indices = np.argsort(scores)[::-1]
-    emotions = [emotions[i] for i in sorted_indices]
-    scores = [scores[i] for i in sorted_indices]
+    # Plot intensity distributions for each emotion
+    for i, emotion in enumerate(EMOTION_NAMES):
+        emotion_result = results[emotion]
+        emotion_labels = list(emotion_result["probabilities"].keys())
+        probabilities = np.array(list(emotion_result["probabilities"].values()))
 
-    # Create horizontal bar chart
-    bars = ax2.barh(emotions, scores, color='skyblue')
-    ax2.set_xlim(0, 1)
-    ax2.set_title("Emotion Predictions")
-    ax2.set_xlabel("Score")
+        # Create bar chart
+        bars = axes[i].bar(
+            range(len(emotion_labels)),
+            probabilities,
+            color=['lightgray'] * len(emotion_labels)
+        )
 
-    # Add value labels to bars
-    for bar, score in zip(bars, scores):
-        if score > 0.01:  # Only show non-zero scores
-            ax2.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,
-                     f'{score:.2f}', va='center')
+        # Highlight the predicted intensity
+        bars[emotion_result["intensity"]].set_color('orangered')
+
+        # Add value labels
+        for bar in bars:
+            height = bar.get_height()
+            if height > 0.05:  # Only show significant values
+                axes[i].text(
+                    bar.get_x() + bar.get_width() / 2.,
+                    height + 0.01,
+                    f'{height:.2f}',
+                    ha='center', va='bottom',
+                    fontsize=8
+                )
+
+        # Set title and labels
+        axes[i].set_title(f"{emotion.capitalize()}: {emotion_result['label']}")
+        axes[i].set_xticks(range(len(emotion_labels)))
+        axes[i].set_xticklabels(emotion_labels, rotation=30, ha='right')
+        axes[i].set_ylim(0, 1.1)
+        axes[i].grid(axis='y', linestyle='--', alpha=0.3)
+
+    # Add a summary text box
+    summary_text = "Emotion Intensity Summary:\n\n"
+    for emotion in EMOTION_NAMES:
+        result = results[emotion]
+        summary_text += f"• {emotion.capitalize()}: {result['label']}\n  (Confidence: {result['confidence']:.2f})\n\n"
+
+    # Add text box for summary
+    ax_summary = fig.add_subplot(gs[1, 2])
+    ax_summary.text(0.1, 0.5, summary_text, va='center', fontsize=10)
+    ax_summary.axis('off')
 
     plt.tight_layout()
+
+    # Save or display
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches='tight')
+        logger.info(f"Visualization saved to {output_path}")
+
     return fig
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Predict emotions in memes")
+    parser = argparse.ArgumentParser(description="Predict emotion intensities in memes (Task C)")
     parser.add_argument("--image", type=str, required=True,
                         help="Path to meme image")
     parser.add_argument("--text", type=str, help="Text in the meme (optional)")
@@ -335,10 +326,6 @@ def main():
                         help="Path to save visualization")
     parser.add_argument("--fp16", action="store_true",
                         help="Use half precision for faster inference")
-    parser.add_argument("--calibration", type=str, choices=['none', 'temperature', 'softmax', 'top_only', 'normalize', 'threshold'],
-                        default='temperature', help="Probability calibration method")
-    parser.add_argument("--temperature", type=float, default=2.0,
-                        help="Temperature for probability scaling")
     args = parser.parse_args()
 
     # Check if image exists
@@ -347,25 +334,21 @@ def main():
         return
 
     # Run prediction
-    results = predict_emotion(
-        args.image, args.model, args.text, args.fp16,
-        args.calibration, args.temperature
+    results = predict_emotion_intensity(
+        args.image, args.model, args.text, args.fp16
     )
 
     # Print results
-    print("\nMeme Emotion Predictions:")
-    print("-" * 30)
-    for emotion, score in sorted(results.items(), key=lambda x: x[1], reverse=True):
-        print(f"{emotion}: {score:.4f}")
-
-    # Get dominant emotion
-    dominant_emotion = max(results.items(), key=lambda x: x[1])[0]
-    print(f"\nDominant emotion: {dominant_emotion}")
+    print("\nMeme Emotion Intensity Predictions:")
+    print("-" * 40)
+    for emotion, data in results.items():
+        print(f"{emotion.capitalize()}: {data['label']} (Level {data['intensity']}, Confidence: {data['confidence']:.2f})")
+        print(f"  All probabilities: {', '.join([f'{k}: {v:.2f}' for k, v in data['probabilities'].items()])}")
+        print()
 
     # Visualize if output path is provided
     if args.output:
-        visualize_prediction(args.image, results)
-        plt.savefig(args.output)
+        visualize_prediction(args.image, results, args.output)
         print(f"Visualization saved to {args.output}")
 
     return results

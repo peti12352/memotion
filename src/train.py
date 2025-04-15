@@ -12,14 +12,15 @@ from torch.utils.data import DataLoader
 from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 from sklearn.metrics import (
-    f1_score, precision_score, recall_score, accuracy_score
+    f1_score, accuracy_score,
+    confusion_matrix, cohen_kappa_score, mean_absolute_error, mean_squared_error
 )
 
 from .dataset import MemeDataset
 from .model import MemeEmotionModel
 from .config import (
     BATCH_SIZE, NUM_EPOCHS, LEARNING_RATE, NUM_WORKERS,
-    MODELS_DIR, MODEL_NAME, NUM_CLASSES, EMOTION_CLASSES
+    MODELS_DIR, MODEL_NAME, EMOTION_NAMES, EMOTION_DIMS, EMOTION_CLASSES
 )
 
 # Configure logging
@@ -46,92 +47,196 @@ def set_seed(seed=42):
     logger.info(f"Random seed set to {seed}")
 
 
-class FocalLoss(nn.Module):
+class OrdinalFocalLoss(nn.Module):
     """
-    Focal Loss for handling class imbalance in multi-label classification
+    Focal Loss variant for ordinal regression in Task C emotion intensity prediction.
 
-    Args:
-        alpha: Controls the balance between classes (default: 0.25)
-        gamma: Controls the focus on hard examples (default: 2.0)
+    For each emotion, we treat it as a multi-class classification problem 
+    where each class represents an intensity level.
     """
 
-    def __init__(self, alpha=0.25, gamma=2.0):
+    def __init__(self, alpha=0.25, gamma=2.0, class_weights=None):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
-        self.bce = nn.BCEWithLogitsLoss(reduction='none')
+        self.class_weights = class_weights
+        self.ce_loss = nn.CrossEntropyLoss(reduction='none', weight=class_weights)
 
-    def forward(self, preds, targets):
-        bce_loss = self.bce(preds, targets)
-        pt = torch.exp(-bce_loss)
-        focal_loss = self.alpha * (1 - pt)**self.gamma * bce_loss
-        return focal_loss.mean()
+    def forward(self, logits, targets):
+        """
+        Args:
+            logits: Model predictions [batch_size, sum(EMOTION_DIMS)]
+            targets: Ground truth one-hot encoded labels [batch_size, sum(EMOTION_DIMS)]
+
+        Returns:
+            Focal loss value
+        """
+        # Split logits and targets by emotion
+        start_idx = 0
+        total_loss = 0
+
+        # Process each emotion separately
+        for i, dim in enumerate(EMOTION_DIMS):
+            # Extract predictions and targets for this emotion
+            emotion_logits = logits[:, start_idx:start_idx + dim]  # [batch_size, emotion_scale]
+            emotion_targets = targets[:, start_idx:start_idx + dim]  # [batch_size, emotion_scale]
+
+            # Convert one-hot targets to class indices for CrossEntropyLoss
+            # Find index of the 1 in each row
+            target_indices = torch.argmax(emotion_targets, dim=1)
+
+            # Standard cross entropy loss
+            ce = self.ce_loss(emotion_logits, target_indices)
+
+            # Apply focal loss formulation
+            pt = torch.exp(-ce)
+            focal_loss = self.alpha * (1 - pt) ** self.gamma * ce
+
+            # Sum over the batch
+            total_loss += focal_loss.mean()
+
+            start_idx += dim
+
+        # Average over all emotions
+        return total_loss / len(EMOTION_DIMS)
 
 
-def calculate_metrics(predictions, targets, threshold=0.5):
-    """Calculate metrics for multi-label classification"""
-    # Convert tensors to numpy arrays if needed
+def calculate_ordinal_metrics(predictions, targets, raw_intensities):
+    """
+    Calculate metrics for Task C - emotion intensity prediction
+
+    Args:
+        predictions: Model logits [batch_size, sum(EMOTION_DIMS)]
+        targets: One-hot encoded groundtruth [batch_size, sum(EMOTION_DIMS)]
+        raw_intensities: Raw intensity values [batch_size, len(EMOTION_NAMES)]
+
+    Returns:
+        Dictionary with metrics for each emotion and overall average
+    """
+    # Convert tensors to numpy if needed
     if isinstance(predictions, torch.Tensor):
         predictions = predictions.cpu().detach().numpy()
     if isinstance(targets, torch.Tensor):
         targets = targets.cpu().detach().numpy()
+    if isinstance(raw_intensities, torch.Tensor):
+        raw_intensities = raw_intensities.cpu().detach().numpy()
 
-    # Ensure 2D arrays with shape (n_samples, n_classes)
-    if len(predictions.shape) == 1:
-        predictions = predictions.reshape(1, -1)
-    if len(targets.shape) == 1:
-        targets = targets.reshape(1, -1)
-    if len(targets.shape) > 2:
-        targets = targets.reshape(targets.shape[0], -1)
-    if len(predictions.shape) > 2:
-        predictions = predictions.reshape(predictions.shape[0], -1)
+    # Convert predictions to intensity levels (0, 1, 2, 3) for each emotion
+    pred_intensities = []
+    start_idx = 0
+    for dim in EMOTION_DIMS:
+        # Get probabilities for each level of this emotion
+        emotion_logits = predictions[:, start_idx:start_idx + dim]
+        # Convert to class predictions by taking argmax
+        pred_intensity = np.argmax(emotion_logits, axis=1)
+        pred_intensities.append(pred_intensity)
+        start_idx += dim
 
-    # Apply threshold to get binary predictions
-    binary_preds = (predictions > threshold).astype(int)
+    # Stack to get [batch_size, num_emotions] array
+    pred_intensities = np.column_stack(pred_intensities)
 
-    # Ensure targets are binary (0 or 1)
-    binary_targets = (targets > 0).astype(int)
+    # Calculate metrics for each emotion
+    metrics = {'per_emotion': {}}
+    overall_acc = 0
+    overall_f1_macro = 0
+    overall_f1_weighted = 0
+    overall_mae = 0
+    overall_rmse = 0
+    overall_kappa = 0
 
-    try:
-        # Calculate metrics
-        precision = precision_score(
-            binary_targets, binary_preds, average='samples', zero_division=0)
-        recall = recall_score(
-            binary_targets, binary_preds, average='samples', zero_division=0)
-        f1 = f1_score(
-            binary_targets, binary_preds, average='samples', zero_division=0)
-        accuracy = accuracy_score(binary_targets, binary_preds)
+    for i, emotion in enumerate(EMOTION_NAMES):
+        # Extract predictions and ground truth for this emotion
+        y_pred = pred_intensities[:, i]
+        y_true = raw_intensities[:, i]
 
-        # Calculate per-class metrics
-        per_class_metrics = {}
-        for i in range(targets.shape[1]):
-            per_class_metrics[f"class_{i}"] = {
-                "precision": precision_score(
-                    binary_targets[:, i], binary_preds[:, i], zero_division=0),
-                "recall": recall_score(
-                    binary_targets[:, i], binary_preds[:, i], zero_division=0),
-                "f1": f1_score(
-                    binary_targets[:, i], binary_preds[:, i], zero_division=0)
-            }
+        # Classification metrics
+        accuracy = accuracy_score(y_true, y_pred)
 
-        return {
-            "accuracy": accuracy,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "per_class": per_class_metrics
+        # Calculate F1 score only if the emotion has more than 2 classes
+        if EMOTION_DIMS[i] > 2:
+            f1_macro = f1_score(y_true, y_pred, average='macro')
+            f1_weighted = f1_score(y_true, y_pred, average='weighted')
+        else:
+            f1_macro = f1_score(y_true, y_pred, average='binary')
+            f1_weighted = f1_macro
+
+        # Calculate confusion matrix
+        cm = confusion_matrix(y_true, y_pred, labels=range(EMOTION_DIMS[i]))
+
+        # Regression metrics (treating intensities as continuous values)
+        mae = mean_absolute_error(y_true, y_pred)
+        rmse = np.sqrt(mean_squared_error(y_true, y_pred))
+
+        # Cohen's Kappa (inter-rater agreement)
+        kappa = cohen_kappa_score(y_true, y_pred, weights='quadratic')
+
+        # Store metrics for this emotion
+        metrics['per_emotion'][emotion] = {
+            'accuracy': float(accuracy),
+            'f1_macro': float(f1_macro),
+            'f1_weighted': float(f1_weighted),
+            'mae': float(mae),
+            'rmse': float(rmse),
+            'kappa': float(kappa),
+            'confusion_matrix': cm.tolist()
         }
 
-    except Exception as e:
-        logger.error(f"Error calculating metrics: {str(e)}")
-        # Return default metrics to avoid breaking the training loop
-        return {
-            "accuracy": 0.0,
-            "precision": 0.0,
-            "recall": 0.0,
-            "f1": 0.0,
-            "per_class": {}
+        # Accumulate for averages
+        overall_acc += accuracy
+        overall_f1_macro += f1_macro
+        overall_f1_weighted += f1_weighted
+        overall_mae += mae
+        overall_rmse += rmse
+        overall_kappa += kappa
+
+    # Calculate averages
+    num_emotions = len(EMOTION_NAMES)
+    metrics['overall'] = {
+        'accuracy': overall_acc / num_emotions,
+        'f1_macro': overall_f1_macro / num_emotions,
+        'f1_weighted': overall_f1_weighted / num_emotions,
+        'mae': overall_mae / num_emotions,
+        'rmse': overall_rmse / num_emotions,
+        'kappa': overall_kappa / num_emotions
+    }
+
+    return metrics
+
+
+def calculate_metrics(predictions, targets, raw_intensities=None):
+    """
+    Calculate metrics for Task C (wrapper for backward compatibility)
+
+    This function maintains compatibility with the original API while 
+    delegating to the new ordinal metrics function.
+    """
+    if raw_intensities is None:
+        # If no raw intensities provided, fall back to original behavior
+        logger.warning("Raw intensities not provided. Metrics may be incorrect.")
+        # Create dummy raw intensities
+        raw_intensities = torch.zeros((predictions.shape[0], len(EMOTION_NAMES)))
+
+    # Use the new ordinal metrics function
+    metrics = calculate_ordinal_metrics(predictions, targets, raw_intensities)
+
+    # Reformat for backward compatibility
+    compat_metrics = {
+        "accuracy": metrics['overall']['accuracy'],
+        "precision": metrics['overall']['f1_macro'],  # Using F1 as a proxy
+        "recall": metrics['overall']['f1_macro'],     # Using F1 as a proxy
+        "f1": metrics['overall']['f1_macro'],
+        "per_class": {}
+    }
+
+    # Convert per-emotion metrics to per-class format
+    for i, emotion in enumerate(EMOTION_NAMES):
+        compat_metrics["per_class"][f"class_{i}"] = {
+            "precision": metrics['per_emotion'][emotion]['f1_macro'],
+            "recall": metrics['per_emotion'][emotion]['f1_macro'],
+            "f1": metrics['per_emotion'][emotion]['f1_macro']
         }
+
+    return compat_metrics
 
 
 def get_lr_scheduler(optimizer, num_warmup_steps, num_training_steps):
@@ -180,7 +285,7 @@ def train(
     )
 
     # Initialize gradient scaler for mixed precision training
-    scaler = GradScaler('cuda') if fp16_training else None
+    scaler = GradScaler() if fp16_training else None
 
     # Initialize early stopping variables
     best_val_f1 = 0.0
@@ -203,6 +308,7 @@ def train(
         train_loss = 0.0
         all_train_preds = []
         all_train_targets = []
+        all_train_intensities = []
 
         progress_bar = tqdm(train_loader, desc=f"Training Epoch {epoch+1}")
         for batch_idx, batch in enumerate(progress_bar):
@@ -213,6 +319,7 @@ def train(
                 "attention_mask": batch["text"]["attention_mask"].to(device)
             }
             targets = batch["labels"].to(device)
+            intensities = batch["intensity"].to(device)
 
             # Forward pass with mixed precision if enabled
             if fp16_training:
@@ -249,13 +356,10 @@ def train(
             # Track loss and predictions
             train_loss += loss.item() * gradient_accumulation_steps
 
-            # Apply sigmoid to get probabilities and ensure correct shape
-            preds = torch.sigmoid(outputs).detach()
-            targets_detached = targets.detach()
-
-            # Store predictions and targets with consistent shapes
-            all_train_preds.append(preds.cpu())
-            all_train_targets.append(targets_detached.cpu())
+            # Store predictions, targets, and intensities
+            all_train_preds.append(outputs.detach().cpu())
+            all_train_targets.append(targets.cpu())
+            all_train_intensities.append(intensities.cpu())
 
             # Update progress bar
             progress_bar.set_postfix({
@@ -266,12 +370,16 @@ def train(
         train_loss /= len(train_loader)
         train_losses.append(train_loss)
 
-        # Carefully combine and reshape predictions and targets
+        # Carefully combine tensors
         all_train_preds = torch.cat(all_train_preds)
         all_train_targets = torch.cat(all_train_targets)
+        all_train_intensities = torch.cat(all_train_intensities)
 
-        # Calculate training metrics without excessive logging
-        train_metrics = calculate_metrics(all_train_preds, all_train_targets)
+        # Log shapes before metric calculation for debugging
+        logger.info(f"Training shapes - predictions: {all_train_preds.shape}, targets: {all_train_targets.shape}, intensities: {all_train_intensities.shape}")
+
+        # Calculate training metrics with raw intensities
+        train_metrics = calculate_metrics(all_train_preds, all_train_targets, all_train_intensities)
         train_f1_scores.append(train_metrics['f1'])
 
         # Validation phase
@@ -279,6 +387,7 @@ def train(
         val_loss = 0.0
         all_val_preds = []
         all_val_targets = []
+        all_val_intensities = []
 
         with torch.no_grad():
             for batch in tqdm(val_loader, desc="Validation"):
@@ -289,6 +398,7 @@ def train(
                     "attention_mask": batch["text"]["attention_mask"].to(device)
                 }
                 targets = batch["labels"].to(device)
+                intensities = batch["intensity"].to(device)
 
                 # Forward pass
                 outputs = model(images, text_data)
@@ -297,24 +407,25 @@ def train(
                 # Track loss and predictions
                 val_loss += loss.item()
 
-                # Apply sigmoid to get probabilities and ensure correct shape
-                preds = torch.sigmoid(outputs).detach()
-                targets_detached = targets.detach()
-
-                # Store predictions and targets with consistent shapes
-                all_val_preds.append(preds.cpu())
-                all_val_targets.append(targets_detached.cpu())
+                # Store predictions, targets, and intensities
+                all_val_preds.append(outputs.cpu())
+                all_val_targets.append(targets.cpu())
+                all_val_intensities.append(intensities.cpu())
 
         # Calculate validation metrics
         val_loss /= len(val_loader)
         val_losses.append(val_loss)
 
-        # Carefully combine and reshape predictions and targets
+        # Carefully combine tensors
         all_val_preds = torch.cat(all_val_preds)
         all_val_targets = torch.cat(all_val_targets)
+        all_val_intensities = torch.cat(all_val_intensities)
 
-        # Calculate validation metrics
-        val_metrics = calculate_metrics(all_val_preds, all_val_targets)
+        # Log shapes before metric calculation for debugging
+        logger.info(f"Validation shapes - predictions: {all_val_preds.shape}, targets: {all_val_targets.shape}, intensities: {all_val_intensities.shape}")
+
+        # Calculate validation metrics with raw intensities
+        val_metrics = calculate_metrics(all_val_preds, all_val_targets, all_val_intensities)
         val_f1_scores.append(val_metrics['f1'])
 
         # Log metrics
@@ -439,11 +550,11 @@ def main(args):
 
     # Initialize model
     logger.info("Initializing model...")
-    model = MemeEmotionModel(num_classes=NUM_CLASSES)
+    model = MemeEmotionModel()
     model = model.to(device)
 
     # Initialize loss function
-    criterion = FocalLoss(alpha=args.focal_alpha, gamma=args.focal_gamma)
+    criterion = OrdinalFocalLoss(alpha=args.focal_alpha, gamma=args.focal_gamma)
 
     # Initialize optimizer
     optimizer = optim.AdamW(
@@ -539,7 +650,7 @@ def main(args):
 
             # Store predictions and targets
             all_test_preds.append(preds.cpu())
-            all_test_targets.append(targets.detach().cpu())
+            all_test_targets.append(targets.cpu())
 
     # Calculate test metrics
     test_loss /= len(test_loader)
@@ -547,6 +658,9 @@ def main(args):
     # Combine predictions and targets
     all_test_preds = torch.cat(all_test_preds)
     all_test_targets = torch.cat(all_test_targets)
+
+    # Log shapes before metric calculation for debugging
+    logger.info(f"Test shapes - predictions: {all_test_preds.shape}, targets: {all_test_targets.shape}")
 
     # Calculate test metrics
     test_metrics = calculate_metrics(all_test_preds, all_test_targets)
