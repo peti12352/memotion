@@ -157,7 +157,7 @@ def evaluate_model(model_path, kaggle_dataset_path=None, output_dir=None, batch_
 
     # Load model
     logger.info(f"Loading model from {model_path}")
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model = MemeEmotionModel(num_classes=len(EMOTION_CLASSES))
 
     if 'model_state_dict' in checkpoint:
