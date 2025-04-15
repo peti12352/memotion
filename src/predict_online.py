@@ -42,7 +42,7 @@ def load_model(model_path):
     start_time = time.time()
 
     # Load checkpoint
-    checkpoint = torch.load(model_path, map_location=device, weights_only=True)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
 
     # Initialize model
     model = MemeEmotionModel(num_classes=len(EMOTION_CLASSES))
