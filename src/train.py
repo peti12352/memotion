@@ -69,17 +69,7 @@ class FocalLoss(nn.Module):
 
 
 def calculate_metrics(predictions, targets, threshold=0.5):
-    """
-    Calculate metrics for multi-label classification with consistent handling of shapes.
-
-    Args:
-        predictions: Model predictions (tensor or numpy array)
-        targets: Ground truth labels (tensor or numpy array)
-        threshold: Threshold for binary classification
-
-    Returns:
-        Dictionary of metrics
-    """
+    """Calculate metrics for multi-label classification"""
     # Convert tensors to numpy arrays if needed
     if isinstance(predictions, torch.Tensor):
         predictions = predictions.cpu().detach().numpy()
@@ -92,42 +82,36 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     if len(targets.shape) == 1:
         targets = targets.reshape(1, -1)
     if len(targets.shape) > 2:
-        # Remove any extra dimensions (like batch dimension)
         targets = targets.reshape(targets.shape[0], -1)
     if len(predictions.shape) > 2:
         predictions = predictions.reshape(predictions.shape[0], -1)
 
     # Apply threshold to get binary predictions
     binary_preds = (predictions > threshold).astype(int)
-    targets = targets.astype(int)
 
-    # Log shapes for debugging
-    print(
-        f"Final shapes - predictions: {binary_preds.shape}, targets: {targets.shape}")
+    # Ensure targets are binary (0 or 1)
+    binary_targets = (targets > 0).astype(int)
 
     try:
         # Calculate metrics
         precision = precision_score(
-            targets, binary_preds, average='samples', zero_division=0)
-        recall = recall_score(targets, binary_preds,
-                              average='samples', zero_division=0)
-        f1 = f1_score(targets, binary_preds,
-                      average='samples', zero_division=0)
-        accuracy = accuracy_score(targets, binary_preds)
+            binary_targets, binary_preds, average='samples', zero_division=0)
+        recall = recall_score(
+            binary_targets, binary_preds, average='samples', zero_division=0)
+        f1 = f1_score(
+            binary_targets, binary_preds, average='samples', zero_division=0)
+        accuracy = accuracy_score(binary_targets, binary_preds)
 
         # Calculate per-class metrics
         per_class_metrics = {}
         for i in range(targets.shape[1]):
-            class_preds = binary_preds[:, i]
-            class_targets = targets[:, i]
-
             per_class_metrics[f"class_{i}"] = {
                 "precision": precision_score(
-                    class_targets, class_preds, zero_division=0),
+                    binary_targets[:, i], binary_preds[:, i], zero_division=0),
                 "recall": recall_score(
-                    class_targets, class_preds, zero_division=0),
+                    binary_targets[:, i], binary_preds[:, i], zero_division=0),
                 "f1": f1_score(
-                    class_targets, class_preds, zero_division=0)
+                    binary_targets[:, i], binary_preds[:, i], zero_division=0)
             }
 
         return {
@@ -139,12 +123,7 @@ def calculate_metrics(predictions, targets, threshold=0.5):
         }
 
     except Exception as e:
-        print(f"Error calculating metrics: {str(e)}")
-        print(
-            f"Predictions shape: {binary_preds.shape}, dtype: {binary_preds.dtype}")
-        print(f"Targets shape: {targets.shape}, dtype: {targets.dtype}")
-        print(f"Sample predictions:\n{binary_preds[:5]}")
-        print(f"Sample targets:\n{targets[:5]}")
+        logger.error(f"Error calculating metrics: {str(e)}")
         # Return default metrics to avoid breaking the training loop
         return {
             "accuracy": 0.0,
@@ -281,36 +260,7 @@ def train(
         all_train_preds = torch.cat(all_train_preds)
         all_train_targets = torch.cat(all_train_targets)
 
-        # Print original shapes for debugging
-        logger.info(
-            f"Raw shapes - predictions: {all_train_preds.shape}, "
-            f"targets: {all_train_targets.shape}"
-        )
-
-        # Debug shapes before further processing
-        logger.info(
-            f"Training pred shape: {all_train_preds.shape}, target shape: {all_train_targets.shape}")
-
-        # Ensure predictions and targets have shape (num_samples, num_classes)
-        if len(all_train_preds.shape) == 1:
-            # Add dimension at the end
-            all_train_preds = all_train_preds.unsqueeze(-1)
-        if len(all_train_targets.shape) == 1:
-            # Add dimension at the end
-            all_train_targets = all_train_targets.unsqueeze(-1)
-
-        # If targets have an extra dimension, remove it
-        if len(all_train_targets.shape) > 2:
-            all_train_targets = all_train_targets.squeeze(1)
-
-        # Final shape check
-        logger.info(
-            f"After reshaping - pred shape: {all_train_preds.shape}, target shape: {all_train_targets.shape}")
-
-        # Convert to numpy arrays
-        all_train_preds = all_train_preds.numpy()
-        all_train_targets = all_train_targets.numpy()
-
+        # Calculate training metrics without excessive logging
         train_metrics = calculate_metrics(all_train_preds, all_train_targets)
 
         # Validation phase
@@ -351,32 +301,7 @@ def train(
         all_val_preds = torch.cat(all_val_preds)
         all_val_targets = torch.cat(all_val_targets)
 
-        # Print original shapes for debugging
-        logger.info(
-            f"Raw shapes - val predictions: {all_val_preds.shape}, "
-            f"val targets: {all_val_targets.shape}"
-        )
-
-        # Ensure predictions and targets have shape (num_samples, num_classes)
-        if len(all_val_preds.shape) == 1:
-            # Add dimension at the end
-            all_val_preds = all_val_preds.unsqueeze(-1)
-        if len(all_val_targets.shape) == 1:
-            # Add dimension at the end
-            all_val_targets = all_val_targets.unsqueeze(-1)
-
-        # If targets have an extra dimension, remove it
-        if len(all_val_targets.shape) > 2:
-            all_val_targets = all_val_targets.squeeze(1)
-
-        # Final shape check
-        logger.info(
-            f"After reshaping - val pred shape: {all_val_preds.shape}, val target shape: {all_val_targets.shape}")
-
-        # Convert to numpy arrays
-        all_val_preds = all_val_preds.numpy()
-        all_val_targets = all_val_targets.numpy()
-
+        # Calculate validation metrics
         val_metrics = calculate_metrics(all_val_preds, all_val_targets)
 
         # Log metrics

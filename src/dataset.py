@@ -45,7 +45,7 @@ class MemeDataset(Dataset):
 
         # Initialize CLIP processor for image processing
         self.clip_processor = CLIPProcessor.from_pretrained(
-            "openai/clip-vit-base-patch32")
+            "openai/clip-vit-base-patch32", use_fast=True)
 
         # Check if kaggle_dataset_path is provided
         if kaggle_dataset_path is not None:
@@ -149,9 +149,9 @@ class MemeDataset(Dataset):
         """Convert label text to appropriate numerical values"""
         # Map overall sentiment to -1, 0, 1
         sentiment_map = {
-            'negative': -1, 'very negative': -1,
-            'neutral': 0,
-            'positive': 1, 'very positive': 1
+            'negative': 0, 'very negative': 0,
+            'neutral': 1,
+            'positive': 2, 'very positive': 2
         }
 
         # Convert text columns to lowercase for consistent mapping
@@ -163,7 +163,7 @@ class MemeDataset(Dataset):
             if col in self.full_df.columns:
                 self.full_df[col] = self.full_df[col].str.lower()
 
-        # Map overall sentiment
+        # Map overall sentiment (use non-negative values)
         if 'overall_sentiment' in self.full_df.columns:
             self.full_df['sentiment'] = self.full_df['overall_sentiment'].map(
                 sentiment_map)
@@ -205,7 +205,21 @@ class MemeDataset(Dataset):
 
         try:
             # Try to open and convert the image
-            img = Image.open(img_path).convert("RGB")
+            img = Image.open(img_path)
+
+            # Handle transparency properly by ensuring RGBA is converted to RGB
+            if img.mode == 'RGBA' or 'transparency' in img.info:
+                # Create a white background
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                # Paste the image with transparency onto the background
+                if img.mode == 'RGBA':
+                    # Use alpha channel as mask
+                    background.paste(img, mask=img.split()[3])
+                else:
+                    background.paste(img, mask=img.info.get('transparency'))
+                img = background
+            else:
+                img = img.convert("RGB")
 
             # Apply any custom transforms if specified
             if self.transform:
