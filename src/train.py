@@ -159,6 +159,7 @@ def train(
     early_stopping_patience=3,
     gradient_accumulation_steps=1,
     fp16_training=True,
+    output_dir=None
 ):
     """Training loop with validation and early stopping"""
     # Initialize data loaders
@@ -185,9 +186,17 @@ def train(
     best_val_f1 = 0.0
     early_stopping_counter = 0
 
+    # Create lists to store loss history for visualization
+    train_losses = []
+    val_losses = []
+    train_f1_scores = []
+    val_f1_scores = []
+    epochs = []
+
     # Training loop
     for epoch in range(num_epochs):
         logger.info(f"Epoch {epoch+1}/{num_epochs}")
+        epochs.append(epoch + 1)
 
         # Training phase
         model.train()
@@ -255,6 +264,7 @@ def train(
 
         # Calculate training metrics
         train_loss /= len(train_loader)
+        train_losses.append(train_loss)
 
         # Carefully combine and reshape predictions and targets
         all_train_preds = torch.cat(all_train_preds)
@@ -262,6 +272,7 @@ def train(
 
         # Calculate training metrics without excessive logging
         train_metrics = calculate_metrics(all_train_preds, all_train_targets)
+        train_f1_scores.append(train_metrics['f1'])
 
         # Validation phase
         model.eval()
@@ -296,6 +307,7 @@ def train(
 
         # Calculate validation metrics
         val_loss /= len(val_loader)
+        val_losses.append(val_loss)
 
         # Carefully combine and reshape predictions and targets
         all_val_preds = torch.cat(all_val_preds)
@@ -303,6 +315,7 @@ def train(
 
         # Calculate validation metrics
         val_metrics = calculate_metrics(all_val_preds, all_val_targets)
+        val_f1_scores.append(val_metrics['f1'])
 
         # Log metrics
         logger.info(
@@ -325,7 +338,11 @@ def train(
                 'val_loss': val_loss,
                 'val_f1': val_metrics['f1'],
                 'train_metrics': train_metrics,
-                'val_metrics': val_metrics
+                'val_metrics': val_metrics,
+                'train_losses': train_losses,
+                'val_losses': val_losses,
+                'train_f1_scores': train_f1_scores,
+                'val_f1_scores': val_f1_scores
             }, model_save_path)
             early_stopping_counter = 0
         else:
@@ -336,6 +353,42 @@ def train(
             if early_stopping_counter >= early_stopping_patience:
                 logger.info("Early stopping triggered")
                 break
+
+    # Plot loss evolution
+    if output_dir:
+        try:
+            import matplotlib.pyplot as plt
+
+            # Set up the figure with two subplots - one for loss, one for F1
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+
+            # Plot training and validation loss
+            ax1.plot(epochs, train_losses, 'b-', label='Training Loss')
+            ax1.plot(epochs, val_losses, 'r-', label='Validation Loss')
+            ax1.set_title('Loss Evolution')
+            ax1.set_xlabel('Epoch')
+            ax1.set_ylabel('Loss')
+            ax1.legend()
+            ax1.grid(True)
+
+            # Plot training and validation F1 scores
+            ax2.plot(epochs, train_f1_scores, 'b-', label='Training F1')
+            ax2.plot(epochs, val_f1_scores, 'r-', label='Validation F1')
+            ax2.set_title('F1 Score Evolution')
+            ax2.set_xlabel('Epoch')
+            ax2.set_ylabel('F1 Score')
+            ax2.legend()
+            ax2.grid(True)
+
+            # Save the figure
+            plots_dir = Path(output_dir) / "plots"
+            plots_dir.mkdir(exist_ok=True, parents=True)
+            fig.savefig(plots_dir / "loss_evolution.png")
+            plt.close(fig)
+
+            logger.info(f"Loss evolution plot saved to {plots_dir / 'loss_evolution.png'}")
+        except Exception as e:
+            logger.error(f"Error creating loss evolution plot: {e}")
 
     return best_val_f1
 
@@ -435,7 +488,8 @@ def main(args):
         model_save_path=model_save_path,
         early_stopping_patience=args.patience,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
-        fp16_training=args.fp16
+        fp16_training=args.fp16,
+        output_dir=args.output_dir
     )
 
     logger.info(

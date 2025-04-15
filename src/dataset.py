@@ -223,10 +223,7 @@ class MemeDataset(Dataset):
             lambda x: 0 if x == 'not motivational' else 1)
 
         # Add neutral class (inverse of any other emotion)
-        has_emotion = (self.full_df['amusement'] |
-                       self.full_df['sarcasm'] |
-                       self.full_df['offense'] |
-                       self.full_df['motivation'])
+        has_emotion = (self.full_df['amusement'] | self.full_df['sarcasm'] | self.full_df['offense'] | self.full_df['motivation'])
         self.full_df['neutral'] = (~has_emotion).astype(int)
 
     def __len__(self):
@@ -279,11 +276,9 @@ class MemeDataset(Dataset):
                 img = self.transform(img)
 
         # Get text - use corrected text if available, else use OCR text
-        if ("text_corrected" in self.labels_df.columns and
-                pd.notna(self.labels_df.iloc[idx]["text_corrected"])):
+        if ("text_corrected" in self.labels_df.columns and pd.notna(self.labels_df.iloc[idx]["text_corrected"])):
             text = self.labels_df.iloc[idx]["text_corrected"]
-        elif ("text_ocr" in self.labels_df.columns and
-              pd.notna(self.labels_df.iloc[idx]["text_ocr"])):
+        elif ("text_ocr" in self.labels_df.columns and pd.notna(self.labels_df.iloc[idx]["text_ocr"])):
             text = self.labels_df.iloc[idx]["text_ocr"]
         else:
             text = ""  # Fallback for images without text
