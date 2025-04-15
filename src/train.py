@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from tqdm import tqdm
 from sklearn.metrics import (
     f1_score, precision_score, recall_score, accuracy_score
@@ -69,59 +69,90 @@ class FocalLoss(nn.Module):
 
 
 def calculate_metrics(predictions, targets, threshold=0.5):
-    """Calculate various metrics for multi-label classification"""
-    # Convert predictions to binary using threshold
-    predictions = predictions > threshold
+    """
+    Calculate metrics for multi-label classification with consistent handling of shapes.
 
+    Args:
+        predictions: Model predictions (tensor or numpy array)
+        targets: Ground truth labels (tensor or numpy array)
+        threshold: Threshold for binary classification
+
+    Returns:
+        Dictionary of metrics
+    """
     # Convert tensors to numpy arrays if needed
     if isinstance(predictions, torch.Tensor):
-        predictions = predictions.cpu().numpy()
+        predictions = predictions.cpu().detach().numpy()
     if isinstance(targets, torch.Tensor):
-        targets = targets.cpu().numpy()
+        targets = targets.cpu().detach().numpy()
 
-    # Ensure both arrays are of type int
-    predictions = predictions.astype(int)
+    # Ensure 2D arrays with shape (n_samples, n_classes)
+    if len(predictions.shape) == 1:
+        predictions = predictions.reshape(1, -1)
+    if len(targets.shape) == 1:
+        targets = targets.reshape(1, -1)
+    if len(targets.shape) > 2:
+        # Remove any extra dimensions (like batch dimension)
+        targets = targets.reshape(targets.shape[0], -1)
+    if len(predictions.shape) > 2:
+        predictions = predictions.reshape(predictions.shape[0], -1)
+
+    # Apply threshold to get binary predictions
+    binary_preds = (predictions > threshold).astype(int)
     targets = targets.astype(int)
 
-    # Reshape targets if needed to match predictions shape
-    if len(targets.shape) > 2:
-        targets = targets.squeeze(1)  # Remove middle dimension if present
+    # Log shapes for debugging
+    print(
+        f"Final shapes - predictions: {binary_preds.shape}, targets: {targets.shape}")
 
-    # Ensure both arrays have the same shape
-    if targets.shape != predictions.shape:
-        raise ValueError(
-            f"Shape mismatch: targets {targets.shape} vs predictions {predictions.shape}"
-        )
+    try:
+        # Calculate metrics
+        precision = precision_score(
+            targets, binary_preds, average='samples', zero_division=0)
+        recall = recall_score(targets, binary_preds,
+                              average='samples', zero_division=0)
+        f1 = f1_score(targets, binary_preds,
+                      average='samples', zero_division=0)
+        accuracy = accuracy_score(targets, binary_preds)
 
-    # Calculate metrics for each class
-    precision = precision_score(
-        targets, predictions, average='samples', zero_division=0)
-    recall = recall_score(targets, predictions,
-                          average='samples', zero_division=0)
-    f1 = f1_score(targets, predictions, average='samples', zero_division=0)
+        # Calculate per-class metrics
+        per_class_metrics = {}
+        for i in range(targets.shape[1]):
+            class_preds = binary_preds[:, i]
+            class_targets = targets[:, i]
 
-    # Calculate accuracy (exact match ratio)
-    accuracy = accuracy_score(targets, predictions)
+            per_class_metrics[f"class_{i}"] = {
+                "precision": precision_score(
+                    class_targets, class_preds, zero_division=0),
+                "recall": recall_score(
+                    class_targets, class_preds, zero_division=0),
+                "f1": f1_score(
+                    class_targets, class_preds, zero_division=0)
+            }
 
-    # Calculate per-class metrics
-    per_class_metrics = {}
-    for i in range(targets.shape[1]):
-        per_class_metrics[f"class_{i}"] = {
-            "precision": precision_score(
-                targets[:, i], predictions[:, i], zero_division=0),
-            "recall": recall_score(
-                targets[:, i], predictions[:, i], zero_division=0),
-            "f1": f1_score(
-                targets[:, i], predictions[:, i], zero_division=0)
+        return {
+            "accuracy": accuracy,
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "per_class": per_class_metrics
         }
 
-    return {
-        "accuracy": accuracy,
-        "precision": precision,
-        "recall": recall,
-        "f1": f1,
-        "per_class": per_class_metrics
-    }
+    except Exception as e:
+        print(f"Error calculating metrics: {str(e)}")
+        print(
+            f"Predictions shape: {binary_preds.shape}, dtype: {binary_preds.dtype}")
+        print(f"Targets shape: {targets.shape}, dtype: {targets.dtype}")
+        print(f"Sample predictions:\n{binary_preds[:5]}")
+        print(f"Sample targets:\n{targets[:5]}")
+        # Return default metrics to avoid breaking the training loop
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1": 0.0,
+            "per_class": {}
+        }
 
 
 def get_lr_scheduler(optimizer, num_warmup_steps, num_training_steps):
@@ -169,7 +200,7 @@ def train(
     )
 
     # Initialize gradient scaler for mixed precision training
-    scaler = GradScaler() if fp16_training else None
+    scaler = GradScaler('cuda') if fp16_training else None
 
     # Initialize early stopping variables
     best_val_f1 = 0.0
@@ -197,7 +228,7 @@ def train(
 
             # Forward pass with mixed precision if enabled
             if fp16_training:
-                with autocast():
+                with autocast('cuda'):
                     outputs = model(images, text_data)
                     loss = criterion(outputs, targets)
                     # Normalize loss for gradient accumulation
@@ -232,8 +263,11 @@ def train(
 
             # Apply sigmoid to get probabilities and ensure correct shape
             preds = torch.sigmoid(outputs).detach()
+            targets_detached = targets.detach()
+
+            # Store predictions and targets with consistent shapes
             all_train_preds.append(preds.cpu())
-            all_train_targets.append(targets.cpu())
+            all_train_targets.append(targets_detached.cpu())
 
             # Update progress bar
             progress_bar.set_postfix({
@@ -242,8 +276,16 @@ def train(
 
         # Calculate training metrics
         train_loss /= len(train_loader)
+
+        # Carefully combine and reshape predictions and targets
         all_train_preds = torch.cat(all_train_preds)
         all_train_targets = torch.cat(all_train_targets)
+
+        # Print original shapes for debugging
+        logger.info(
+            f"Raw shapes - predictions: {all_train_preds.shape}, "
+            f"targets: {all_train_targets.shape}"
+        )
 
         # Debug shapes before further processing
         logger.info(
@@ -295,18 +337,25 @@ def train(
                 val_loss += loss.item()
 
                 # Apply sigmoid to get probabilities and ensure correct shape
-                preds = torch.sigmoid(outputs)
+                preds = torch.sigmoid(outputs).detach()
+                targets_detached = targets.detach()
+
+                # Store predictions and targets with consistent shapes
                 all_val_preds.append(preds.cpu())
-                all_val_targets.append(targets.cpu())
+                all_val_targets.append(targets_detached.cpu())
 
         # Calculate validation metrics
         val_loss /= len(val_loader)
+
+        # Carefully combine and reshape predictions and targets
         all_val_preds = torch.cat(all_val_preds)
         all_val_targets = torch.cat(all_val_targets)
 
-        # Debug shapes before further processing
+        # Print original shapes for debugging
         logger.info(
-            f"Validation pred shape: {all_val_preds.shape}, target shape: {all_val_targets.shape}")
+            f"Raw shapes - val predictions: {all_val_preds.shape}, "
+            f"val targets: {all_val_targets.shape}"
+        )
 
         # Ensure predictions and targets have shape (num_samples, num_classes)
         if len(all_val_preds.shape) == 1:

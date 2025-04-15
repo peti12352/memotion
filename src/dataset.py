@@ -247,14 +247,14 @@ class MemeDataset(Dataset):
         )
 
         # Get labels for multi-label classification
-        # Convert to float32 and ensure proper shape for multi-label classification
+        # Create flat tensor of shape (num_classes,) to ensure consistency
         labels = torch.tensor([
             self.labels_df.iloc[idx]["amusement"],
             self.labels_df.iloc[idx]["sarcasm"],
             self.labels_df.iloc[idx]["offense"],
             self.labels_df.iloc[idx]["motivation"],
             self.labels_df.iloc[idx]["neutral"]
-        ], dtype=torch.float32)  # Shape will be (num_classes,)
+        ], dtype=torch.float32)  # Shape is (5,)
 
         return {
             "image": image_inputs["pixel_values"].squeeze(0),
