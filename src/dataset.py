@@ -208,15 +208,18 @@ class MemeDataset(Dataset):
             img = Image.open(img_path)
 
             # Handle transparency properly by ensuring RGBA is converted to RGB
-            if img.mode == 'RGBA' or 'transparency' in img.info:
+            if img.mode == 'RGBA':
                 # Create a white background
                 background = Image.new('RGB', img.size, (255, 255, 255))
                 # Paste the image with transparency onto the background
-                if img.mode == 'RGBA':
-                    # Use alpha channel as mask
-                    background.paste(img, mask=img.split()[3])
-                else:
-                    background.paste(img, mask=img.info.get('transparency'))
+                # Use alpha channel as mask
+                background.paste(img, mask=img.split()[3])
+                img = background
+            elif 'transparency' in img.info:
+                # For palette images with transparency
+                img = img.convert('RGBA')
+                background = Image.new('RGB', img.size, (255, 255, 255))
+                background.paste(img, mask=img.split()[3])
                 img = background
             else:
                 img = img.convert("RGB")
