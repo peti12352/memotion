@@ -48,8 +48,6 @@ class MemeEmotionModel(nn.Module):
         )
 
     def forward(self, images, text):
-        batch_size = images.size(0)
-
         # Get image features
         with torch.no_grad():
             vision_outputs = self.vision_model(images)

@@ -102,12 +102,12 @@ def calibrate_probabilities(probs, method='none', temperature=1.0):
 
     if method == 'temperature':
         # Temperature scaling (higher temp = more uniform)
-        scaled = np.power(probs, 1/temperature)
+        scaled = np.power(probs, 1 / temperature)
         return scaled
 
     if method == 'softmax':
         # Convert to softmax (mutually exclusive classes)
-        exp_probs = np.exp(np.array(list(probs.values()))/temperature)
+        exp_probs = np.exp(np.array(list(probs.values())) / temperature)
         softmax_probs = exp_probs / np.sum(exp_probs)
         return {k: float(softmax_probs[i]) for i, k in enumerate(probs.keys())}
 
@@ -226,7 +226,7 @@ def visualize_prediction(image_path, results):
     # Add value labels to bars
     for bar, score in zip(bars, scores):
         if score > 0.01:  # Only show non-zero scores
-            ax2.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height()/2,
+            ax2.text(bar.get_width() + 0.01, bar.get_y() + bar.get_height() / 2,
                      f'{score:.2f}', va='center')
 
     plt.tight_layout()
@@ -273,7 +273,7 @@ def main():
 
     # Visualize if output path is provided
     if args.output:
-        fig = visualize_prediction(args.image, results)
+        visualize_prediction(args.image, results)
         plt.savefig(args.output)
         print(f"Visualization saved to {args.output}")
 

@@ -1,0 +1,7 @@
+[MASTER]
+disable=
+    C0301,  # line too long
+
+[FORMAT]
+# Maximum number of characters on a single line. Default is 100.
+max-line-length=120 

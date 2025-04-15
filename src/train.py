@@ -64,7 +64,7 @@ class FocalLoss(nn.Module):
     def forward(self, preds, targets):
         bce_loss = self.bce(preds, targets)
         pt = torch.exp(-bce_loss)
-        focal_loss = self.alpha * (1-pt)**self.gamma * bce_loss
+        focal_loss = self.alpha * (1 - pt)**self.gamma * bce_loss
         return focal_loss.mean()
 
 
@@ -364,8 +364,13 @@ def main(args):
         split="val",
         kaggle_dataset_path=args.kaggle_dataset_path
     )
+    test_dataset = MemeDataset(
+        split="test",
+        kaggle_dataset_path=args.kaggle_dataset_path
+    )
     logger.info(f"Train dataset size: {len(train_dataset)}")
     logger.info(f"Validation dataset size: {len(val_dataset)}")
+    logger.info(f"Test dataset size: {len(test_dataset)}")
 
     # Initialize model
     logger.info("Initializing model...")
@@ -423,6 +428,101 @@ def main(args):
 
     logger.info(
         f"Training completed with best validation F1: {best_val_f1:.4f}")
+
+    # Evaluate on test set
+    logger.info("Evaluating final model on test set...")
+
+    # Load best model from checkpoint
+    checkpoint = torch.load(model_save_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.eval()
+
+    # Create test dataloader
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=NUM_WORKERS,
+        pin_memory=True
+    )
+
+    # Run evaluation on test set
+    test_loss = 0.0
+    all_test_preds = []
+    all_test_targets = []
+
+    with torch.no_grad():
+        for batch in tqdm(test_loader, desc="Test Evaluation"):
+            # Move data to device
+            images = batch["image"].to(device)
+            text_data = {
+                "input_ids": batch["text"]["input_ids"].to(device),
+                "attention_mask": batch["text"]["attention_mask"].to(device)
+            }
+            targets = batch["labels"].to(device)
+
+            # Forward pass
+            outputs = model(images, text_data)
+            loss = criterion(outputs, targets)
+
+            # Track loss and predictions
+            test_loss += loss.item()
+
+            # Apply sigmoid to get probabilities
+            preds = torch.sigmoid(outputs).detach()
+
+            # Store predictions and targets
+            all_test_preds.append(preds.cpu())
+            all_test_targets.append(targets.detach().cpu())
+
+    # Calculate test metrics
+    test_loss /= len(test_loader)
+
+    # Combine predictions and targets
+    all_test_preds = torch.cat(all_test_preds)
+    all_test_targets = torch.cat(all_test_targets)
+
+    # Calculate test metrics
+    test_metrics = calculate_metrics(all_test_preds, all_test_targets)
+
+    # Log test metrics
+    logger.info(f"Test Loss: {test_loss:.4f}")
+    logger.info(f"Test Accuracy: {test_metrics['accuracy']:.4f}")
+    logger.info(f"Test Precision: {test_metrics['precision']:.4f}")
+    logger.info(f"Test Recall: {test_metrics['recall']:.4f}")
+    logger.info(f"Test F1: {test_metrics['f1']:.4f}")
+
+    # Log per-class metrics
+    logger.info("Per-class test metrics:")
+    for class_idx, metrics in test_metrics['per_class'].items():
+        logger.info(f"  {class_idx}: Precision={metrics['precision']:.4f}, "
+                    f"Recall={metrics['recall']:.4f}, F1={metrics['f1']:.4f}")
+
+    # Save test metrics in the model checkpoint
+    checkpoint['test_loss'] = test_loss
+    checkpoint['test_metrics'] = test_metrics
+
+    # Save updated checkpoint
+    torch.save(checkpoint, model_save_path)
+
+    # Also save a separate JSON file with metrics
+    import json
+    metrics_path = Path(args.model_dir) / f"{MODEL_NAME}_metrics.json"
+
+    # Convert metrics for JSON serialization
+    serializable_metrics = {
+        'train': {k: float(v) if isinstance(v, (torch.Tensor, np.ndarray)) else v
+                  for k, v in checkpoint['train_metrics'].items() if k != 'per_class'},
+        'validation': {k: float(v) if isinstance(v, (torch.Tensor, np.ndarray)) else v
+                       for k, v in checkpoint['val_metrics'].items() if k != 'per_class'},
+        'test': {k: float(v) if isinstance(v, (torch.Tensor, np.ndarray)) else v
+                 for k, v in test_metrics.items() if k != 'per_class'},
+    }
+
+    with open(metrics_path, 'w') as f:
+        json.dump(serializable_metrics, f, indent=4)
+
+    logger.info(f"Test metrics saved to {metrics_path}")
 
     return best_val_f1
 
