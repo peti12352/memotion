@@ -79,13 +79,19 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     if isinstance(targets, torch.Tensor):
         targets = targets.cpu().numpy()
 
-    # Ensure both arrays are of type int and have the same shape
+    # Ensure both arrays are of type int
     predictions = predictions.astype(int)
     targets = targets.astype(int)
 
-    # Reshape targets if needed (remove extra dimension)
+    # Reshape targets if needed to match predictions shape
     if len(targets.shape) > 2:
-        targets = targets.squeeze(1)
+        targets = targets.squeeze(1)  # Remove middle dimension if present
+
+    # Ensure both arrays have the same shape
+    if targets.shape != predictions.shape:
+        raise ValueError(
+            f"Shape mismatch: targets {targets.shape} vs predictions {predictions.shape}"
+        )
 
     # Calculate metrics for each class
     precision = precision_score(
@@ -239,6 +245,10 @@ def train(
         all_train_preds = torch.cat(all_train_preds)
         all_train_targets = torch.cat(all_train_targets)
 
+        # Debug shapes before further processing
+        logger.info(
+            f"Training pred shape: {all_train_preds.shape}, target shape: {all_train_targets.shape}")
+
         # Ensure predictions and targets have shape (num_samples, num_classes)
         if len(all_train_preds.shape) == 1:
             # Add dimension at the end
@@ -246,6 +256,14 @@ def train(
         if len(all_train_targets.shape) == 1:
             # Add dimension at the end
             all_train_targets = all_train_targets.unsqueeze(-1)
+
+        # If targets have an extra dimension, remove it
+        if len(all_train_targets.shape) > 2:
+            all_train_targets = all_train_targets.squeeze(1)
+
+        # Final shape check
+        logger.info(
+            f"After reshaping - pred shape: {all_train_preds.shape}, target shape: {all_train_targets.shape}")
 
         # Convert to numpy arrays
         all_train_preds = all_train_preds.numpy()
@@ -286,6 +304,10 @@ def train(
         all_val_preds = torch.cat(all_val_preds)
         all_val_targets = torch.cat(all_val_targets)
 
+        # Debug shapes before further processing
+        logger.info(
+            f"Validation pred shape: {all_val_preds.shape}, target shape: {all_val_targets.shape}")
+
         # Ensure predictions and targets have shape (num_samples, num_classes)
         if len(all_val_preds.shape) == 1:
             # Add dimension at the end
@@ -293,6 +315,14 @@ def train(
         if len(all_val_targets.shape) == 1:
             # Add dimension at the end
             all_val_targets = all_val_targets.unsqueeze(-1)
+
+        # If targets have an extra dimension, remove it
+        if len(all_val_targets.shape) > 2:
+            all_val_targets = all_val_targets.squeeze(1)
+
+        # Final shape check
+        logger.info(
+            f"After reshaping - val pred shape: {all_val_preds.shape}, val target shape: {all_val_targets.shape}")
 
         # Convert to numpy arrays
         all_val_preds = all_val_preds.numpy()
