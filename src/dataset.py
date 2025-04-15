@@ -45,7 +45,7 @@ class MemeDataset(Dataset):
 
         # Initialize CLIP processor for image processing
         self.clip_processor = CLIPProcessor.from_pretrained(
-            "openai/clip-vit-base-patch32", use_fast=True)
+            "openai/clip-vit-base-patch32")
 
         # Check if kaggle_dataset_path is provided
         if kaggle_dataset_path is not None:
