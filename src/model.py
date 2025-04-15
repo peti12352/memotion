@@ -101,7 +101,8 @@ class MemeEmotionModel(nn.Module):
         weighted_text = text_features * weights[:, 1].unsqueeze(1)
 
         # Combine weighted features
-        multimodal_features = weighted_image + weighted_text  # [batch_size, 512]
+        multimodal_features = weighted_image + \
+            weighted_text  # [batch_size, 512]
 
         # Generate shared features
         shared = self.shared_features(multimodal_features)  # [batch_size, 256]
@@ -109,7 +110,8 @@ class MemeEmotionModel(nn.Module):
         # Apply each emotion classifier head and concatenate results
         emotion_outputs = []
         for head in self.classifier_heads:
-            emotion_outputs.append(head(shared))  # Each head output: [batch_size, emotion_scale]
+            # Each head output: [batch_size, emotion_scale]
+            emotion_outputs.append(head(shared))
 
         # Two options for returning outputs:
         # 1. Return list of separate emotion outputs (more structured)
@@ -117,7 +119,8 @@ class MemeEmotionModel(nn.Module):
 
         # Option 2: Concatenate all outputs for compatibility
         # We'll convert to logits for each intensity level
-        return torch.cat(emotion_outputs, dim=1)  # [batch_size, sum(EMOTION_DIMS)]
+        # [batch_size, sum(EMOTION_DIMS)]
+        return torch.cat(emotion_outputs, dim=1)
 
     def predict_intensities(self, images, text):
         """Predict the intensity level for each emotion"""
