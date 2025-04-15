@@ -147,12 +147,29 @@ def preprocess_image_and_text(image_path, text=None):
         logger.warning(f"Error loading image {image_path}: {str(e)}. Using placeholder.")
         img = Image.new('RGB', (224, 224), color='black')
 
-    # Process image with CLIP processor - same as in dataset.py
-    image_inputs = clip_processor(
-        images=img,
-        return_tensors="pt",
-        padding=True
-    )
+    # Process image with CLIP processor - avoiding the compatibility issue
+    try:
+        # Use the processor's image preprocessing method directly
+        image_inputs = {}
+        if hasattr(clip_processor, "preprocess"):
+            # For newer versions of transformers
+            processed_image = clip_processor.preprocess(img, return_tensors="pt")
+            image_inputs["pixel_values"] = processed_image["pixel_values"]
+        else:
+            # Fallback for older versions
+            import torchvision.transforms as T
+            transform = T.Compose([
+                T.Resize((224, 224)),
+                T.ToTensor(),
+                T.Normalize(mean=[0.48145466, 0.4578275, 0.40821073],
+                            std=[0.26862954, 0.26130258, 0.27577711])
+            ])
+            image_tensor = transform(img).unsqueeze(0)
+            image_inputs["pixel_values"] = image_tensor
+    except Exception as e:
+        logger.warning(f"Error processing image: {str(e)}. Using default tensor.")
+        # Create a default tensor if processing fails
+        image_inputs = {"pixel_values": torch.zeros((1, 3, 224, 224))}
 
     # Process text - same as in dataset.py
     if text is None:
