@@ -83,6 +83,10 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     predictions = predictions.astype(int)
     targets = targets.astype(int)
 
+    # Reshape targets if needed (remove extra dimension)
+    if len(targets.shape) > 2:
+        targets = targets.squeeze(1)
+
     # Calculate metrics for each class
     precision = precision_score(
         targets, predictions, average='samples', zero_division=0)
@@ -97,9 +101,12 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     per_class_metrics = {}
     for i in range(targets.shape[1]):
         per_class_metrics[f"class_{i}"] = {
-            "precision": precision_score(targets[:, i], predictions[:, i], zero_division=0),
-            "recall": recall_score(targets[:, i], predictions[:, i], zero_division=0),
-            "f1": f1_score(targets[:, i], predictions[:, i], zero_division=0)
+            "precision": precision_score(
+                targets[:, i], predictions[:, i], zero_division=0),
+            "recall": recall_score(
+                targets[:, i], predictions[:, i], zero_division=0),
+            "f1": f1_score(
+                targets[:, i], predictions[:, i], zero_division=0)
         }
 
     return {
