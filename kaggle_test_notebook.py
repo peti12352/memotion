@@ -15,7 +15,7 @@ from IPython.display import Markdown, display, Image, FileLink
 # First, check if the repository is already cloned
 if not os.path.exists("memotion"):
     # Clone the repository if it doesn't exist
-    !git clone https: // github.com/your-username/memotion.git
+    !git clone https: // github.com/peti12352/memotion.git
     %cd memotion
 else:
     print("Repository already exists, using the existing one")
