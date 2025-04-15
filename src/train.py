@@ -79,7 +79,7 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     if isinstance(targets, torch.Tensor):
         targets = targets.cpu().numpy()
 
-    # Ensure both arrays are of type int for sklearn metrics
+    # Ensure both arrays are of type int and have the same shape
     predictions = predictions.astype(int)
     targets = targets.astype(int)
 
@@ -93,11 +93,21 @@ def calculate_metrics(predictions, targets, threshold=0.5):
     # Calculate accuracy (exact match ratio)
     accuracy = accuracy_score(targets, predictions)
 
+    # Calculate per-class metrics
+    per_class_metrics = {}
+    for i in range(targets.shape[1]):
+        per_class_metrics[f"class_{i}"] = {
+            "precision": precision_score(targets[:, i], predictions[:, i], zero_division=0),
+            "recall": recall_score(targets[:, i], predictions[:, i], zero_division=0),
+            "f1": f1_score(targets[:, i], predictions[:, i], zero_division=0)
+        }
+
     return {
         "accuracy": accuracy,
         "precision": precision,
         "recall": recall,
-        "f1": f1
+        "f1": f1,
+        "per_class": per_class_metrics
     }
 
 
