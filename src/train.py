@@ -1,6 +1,9 @@
+"""
+Training script for the meme emotion recognition model.
+"""
+import os
 import argparse
 import logging
-import os
 import random
 from pathlib import Path
 
@@ -60,8 +63,7 @@ class OrdinalFocalLoss(nn.Module):
         self.alpha = alpha
         self.gamma = gamma
         self.class_weights = class_weights
-        self.ce_loss = nn.CrossEntropyLoss(
-            reduction='none', weight=class_weights)
+        self.ce_loss = nn.CrossEntropyLoss(reduction='none', weight=class_weights)
 
     def forward(self, logits, targets):
         """
@@ -79,10 +81,8 @@ class OrdinalFocalLoss(nn.Module):
         # Process each emotion separately
         for i, dim in enumerate(EMOTION_DIMS):
             # Extract predictions and targets for this emotion
-            # [batch_size, emotion_scale]
-            emotion_logits = logits[:, start_idx:start_idx + dim]
-            # [batch_size, emotion_scale]
-            emotion_targets = targets[:, start_idx:start_idx + dim]
+            emotion_logits = logits[:, start_idx:start_idx + dim]  # [batch_size, emotion_scale]
+            emotion_targets = targets[:, start_idx:start_idx + dim]  # [batch_size, emotion_scale]
 
             # Convert one-hot targets to class indices for CrossEntropyLoss
             # Find index of the 1 in each row
@@ -210,16 +210,14 @@ def calculate_metrics(predictions, targets, raw_intensities=None):
     """
     Calculate metrics for Task C (wrapper for backward compatibility)
 
-    This function maintains compatibility with the original API while
+    This function maintains compatibility with the original API while 
     delegating to the new ordinal metrics function.
     """
     if raw_intensities is None:
         # If no raw intensities provided, fall back to original behavior
-        logger.warning(
-            "Raw intensities not provided. Metrics may be incorrect.")
+        logger.warning("Raw intensities not provided. Metrics may be incorrect.")
         # Create dummy raw intensities
-        raw_intensities = torch.zeros(
-            (predictions.shape[0], len(EMOTION_NAMES)))
+        raw_intensities = torch.zeros((predictions.shape[0], len(EMOTION_NAMES)))
 
     # Use the new ordinal metrics function
     metrics = calculate_ordinal_metrics(predictions, targets, raw_intensities)
@@ -381,12 +379,10 @@ def train(
         all_train_intensities = torch.cat(all_train_intensities)
 
         # Log shapes before metric calculation for debugging
-        logger.info(
-            f"Training shapes - predictions: {all_train_preds.shape}, targets: {all_train_targets.shape}, intensities: {all_train_intensities.shape}")
+        logger.info(f"Training shapes - predictions: {all_train_preds.shape}, targets: {all_train_targets.shape}, intensities: {all_train_intensities.shape}")
 
         # Calculate training metrics with raw intensities
-        train_metrics = calculate_metrics(
-            all_train_preds, all_train_targets, all_train_intensities)
+        train_metrics = calculate_metrics(all_train_preds, all_train_targets, all_train_intensities)
         train_f1_scores.append(train_metrics['f1'])
 
         # Validation phase
@@ -429,12 +425,10 @@ def train(
         all_val_intensities = torch.cat(all_val_intensities)
 
         # Log shapes before metric calculation for debugging
-        logger.info(
-            f"Validation shapes - predictions: {all_val_preds.shape}, targets: {all_val_targets.shape}, intensities: {all_val_intensities.shape}")
+        logger.info(f"Validation shapes - predictions: {all_val_preds.shape}, targets: {all_val_targets.shape}, intensities: {all_val_intensities.shape}")
 
         # Calculate validation metrics with raw intensities
-        val_metrics = calculate_metrics(
-            all_val_preds, all_val_targets, all_val_intensities)
+        val_metrics = calculate_metrics(all_val_preds, all_val_targets, all_val_intensities)
         val_f1_scores.append(val_metrics['f1'])
 
         # Log metrics
@@ -506,8 +500,7 @@ def train(
             fig.savefig(plots_dir / "loss_evolution.png")
             plt.close(fig)
 
-            logger.info(
-                f"Loss evolution plot saved to {plots_dir / 'loss_evolution.png'}")
+            logger.info(f"Loss evolution plot saved to {plots_dir / 'loss_evolution.png'}")
         except Exception as e:
             logger.error(f"Error creating loss evolution plot: {e}")
 
@@ -564,8 +557,7 @@ def main(args):
     model = model.to(device)
 
     # Initialize loss function
-    criterion = OrdinalFocalLoss(
-        alpha=args.focal_alpha, gamma=args.focal_gamma)
+    criterion = OrdinalFocalLoss(alpha=args.focal_alpha, gamma=args.focal_gamma)
 
     # Initialize optimizer
     optimizer = optim.AdamW(
@@ -671,8 +663,7 @@ def main(args):
     all_test_targets = torch.cat(all_test_targets)
 
     # Log shapes before metric calculation for debugging
-    logger.info(
-        f"Test shapes - predictions: {all_test_preds.shape}, targets: {all_test_targets.shape}")
+    logger.info(f"Test shapes - predictions: {all_test_preds.shape}, targets: {all_test_targets.shape}")
 
     # Calculate test metrics
     test_metrics = calculate_metrics(all_test_preds, all_test_targets)
@@ -696,6 +687,11 @@ def main(args):
 
     # Save updated checkpoint
     torch.save(checkpoint, model_save_path)
+
+    # Print the full absolute path of saved model
+    print("\n" + "=" * 50)
+    print(f"Model saved at: {os.path.abspath(model_save_path)}")
+    print("=" * 50 + "\n")
 
     # Also save a separate JSON file with metrics
     import json
@@ -757,8 +753,7 @@ def main(args):
     }
 
     # Save the model card
-    model_card_path = Path(
-        args.output_dir) / f"{MODEL_NAME}_card.json" if args.output_dir else Path(f"{MODEL_NAME}_card.json")
+    model_card_path = Path(args.output_dir) / f"{MODEL_NAME}_card.json" if args.output_dir else Path(f"{MODEL_NAME}_card.json")
     with open(model_card_path, 'w') as f:
         json.dump(model_card, f, indent=2)
 
