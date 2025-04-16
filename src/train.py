@@ -50,57 +50,73 @@ def set_seed(seed=42):
     logger.info(f"Random seed set to {seed}")
 
 
+def mixup_data(x, y, alpha=0.2, device=None):
+    """Performs mixup on the input data and label"""
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+
+    batch_size = x.size()[0]
+    index = torch.randperm(batch_size)
+    if device:
+        index = index.to(device)
+
+    mixed_x = lam * x + (1 - lam) * x[index]
+    mixed_y = lam * y + (1 - lam) * y[index]
+    return mixed_x, mixed_y
+
+
+def label_smoothing(targets, num_classes, smoothing=0.1):
+    """Applies label smoothing to the targets"""
+    with torch.no_grad():
+        targets = targets * (1 - smoothing) + smoothing / num_classes
+    return targets
+
+
 class OrdinalFocalLoss(nn.Module):
-    """
-    Focal Loss variant for ordinal regression in Task C emotion intensity prediction.
+    """Focal Loss variant for ordinal regression with label smoothing"""
 
-    For each emotion, we treat it as a multi-class classification problem 
-    where each class represents an intensity level.
-    """
-
-    def __init__(self, alpha=0.25, gamma=2.0, class_weights=None):
+    def __init__(self, alpha=0.75, gamma=2.0, smoothing=0.1):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
-        self.class_weights = class_weights
-        self.ce_loss = nn.CrossEntropyLoss(reduction='none', weight=class_weights)
+        self.smoothing = smoothing
+        self.ce_loss = nn.CrossEntropyLoss(reduction='none')
 
     def forward(self, logits, targets):
-        """
-        Args:
-            logits: Model predictions [batch_size, sum(EMOTION_DIMS)]
-            targets: Ground truth one-hot encoded labels [batch_size, sum(EMOTION_DIMS)]
-
-        Returns:
-            Focal loss value
-        """
-        # Split logits and targets by emotion
         start_idx = 0
         total_loss = 0
 
-        # Process each emotion separately
         for i, dim in enumerate(EMOTION_DIMS):
-            # Extract predictions and targets for this emotion
-            emotion_logits = logits[:, start_idx:start_idx + dim]  # [batch_size, emotion_scale]
-            emotion_targets = targets[:, start_idx:start_idx + dim]  # [batch_size, emotion_scale]
+            emotion_logits = logits[:, start_idx:start_idx + dim]
+            emotion_targets = targets[:, start_idx:start_idx + dim]
 
-            # Convert one-hot targets to class indices for CrossEntropyLoss
-            # Find index of the 1 in each row
+            # Get both class indices and smoothed targets
             target_indices = torch.argmax(emotion_targets, dim=1)
+            smoothed_targets = label_smoothing(emotion_targets.float(), dim, self.smoothing)
 
-            # Standard cross entropy loss
+            # Calculate standard cross entropy for focal loss
             ce = self.ce_loss(emotion_logits, target_indices)
 
-            # Apply focal loss formulation
+            # Apply focal loss formulation using hard targets
             pt = torch.exp(-ce)
             focal_loss = self.alpha * (1 - pt) ** self.gamma * ce
 
-            # Sum over the batch
-            total_loss += focal_loss.mean()
+            # Calculate additional smooth loss using smoothed targets
+            smooth_loss = -torch.sum(smoothed_targets * torch.log_softmax(emotion_logits, dim=1), dim=1)
+
+            # Combine both losses
+            combined_loss = 0.8 * focal_loss + 0.2 * smooth_loss
+
+            # Add confidence penalty
+            probs = torch.softmax(emotion_logits, dim=1)
+            confidence_penalty = -0.1 * torch.mean(probs * torch.log(probs + 1e-7))
+
+            total_loss += combined_loss.mean() + confidence_penalty
 
             start_idx += dim
 
-        # Average over all emotions
         return total_loss / len(EMOTION_DIMS)
 
 
@@ -327,6 +343,10 @@ def train(
             # Forward pass with mixed precision if enabled
             if fp16_training:
                 with autocast('cuda'):
+                    # Apply mixup during training
+                    if model.training:
+                        images, targets = mixup_data(images, targets, alpha=0.2, device=device)
+
                     outputs = model(images, text_data)
                     loss = criterion(outputs, targets)
                     # Normalize loss for gradient accumulation
@@ -337,6 +357,8 @@ def train(
 
                 # Gradient accumulation
                 if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                    # Clip gradients
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad()
@@ -344,6 +366,10 @@ def train(
                         scheduler.step()
             else:
                 # Standard training without mixed precision
+                # Apply mixup during training
+                if model.training:
+                    images, targets = mixup_data(images, targets, alpha=0.2, device=device)
+
                 outputs = model(images, text_data)
                 loss = criterion(outputs, targets)
                 loss = loss / gradient_accumulation_steps
@@ -351,6 +377,8 @@ def train(
                 loss.backward()
 
                 if (batch_idx + 1) % gradient_accumulation_steps == 0:
+                    # Clip gradients
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                     optimizer.step()
                     optimizer.zero_grad()
                     if scheduler is not None:

@@ -40,34 +40,76 @@ class MemeEmotionModel(nn.Module):
         for param in self.text_model.pooler.parameters():
             param.requires_grad = True
 
-        # Projection layers to common embedding space
-        self.vision_projection = nn.Linear(768, 512)
-        self.text_projection = nn.Linear(768, 512)
-
-        # Simple fusion mechanism (concat + attention)
-        self.fusion = nn.Sequential(
-            nn.Linear(1024, 512),
+        # Projection layers to common embedding space with regularization
+        self.vision_projection = nn.Sequential(
+            nn.Linear(768, 768),
+            nn.LayerNorm(768),
             nn.ReLU(),
-            nn.Dropout(0.2)
+            nn.Dropout(0.3),
+            nn.Linear(768, 512),
+            nn.LayerNorm(512)
         )
 
-        # Attention for weighting modalities
+        self.text_projection = nn.Sequential(
+            nn.Linear(768, 768),
+            nn.LayerNorm(768),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(768, 512),
+            nn.LayerNorm(512)
+        )
+
+        # Enhanced fusion mechanism with residual connections
+        self.fusion = nn.Sequential(
+            nn.Linear(1024, 768),
+            nn.LayerNorm(768),
+            nn.ReLU(),
+            nn.Dropout(0.4),
+            nn.Linear(768, 512),
+            nn.LayerNorm(512),
+            nn.ReLU(),
+            nn.Dropout(0.4)
+        )
+
+        # Attention for weighting modalities with temperature scaling
         self.modality_attention = nn.Sequential(
-            nn.Linear(512, 2),  # 2 for text and vision modalities
+            nn.Linear(512, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(0.3),
+            nn.Linear(256, 2),
             nn.Softmax(dim=1)
         )
 
-        # Multi-head emotion classifier for Task C
-        # Each emotion gets its own head with output size matching its scale
+        # Deeper shared features network
         self.shared_features = nn.Sequential(
-            nn.Linear(512, 256),
+            nn.Linear(512, 512),
+            nn.LayerNorm(512),
             nn.ReLU(),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
+            nn.Linear(512, 384),
+            nn.LayerNorm(384),
+            nn.ReLU(),
+            nn.Dropout(0.5),
+            nn.Linear(384, 256),
+            nn.LayerNorm(256),
+            nn.ReLU(),
+            nn.Dropout(0.5),
         )
 
-        # Create separate classifier heads for each emotion with appropriate sizes
+        # Enhanced classifier heads with deeper architecture
         self.classifier_heads = nn.ModuleList([
-            nn.Linear(256, dim) for dim in EMOTION_DIMS
+            nn.Sequential(
+                nn.Linear(256, 256),
+                nn.LayerNorm(256),
+                nn.ReLU(),
+                nn.Dropout(0.5),
+                nn.Linear(256, 128),
+                nn.LayerNorm(128),
+                nn.ReLU(),
+                nn.Dropout(0.4),
+                nn.Linear(128, dim)
+            ) for dim in EMOTION_DIMS
         ])
 
     def forward(self, images, text):

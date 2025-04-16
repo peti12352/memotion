@@ -234,7 +234,7 @@ def evaluate_model(model_path, kaggle_dataset_path=None, output_dir=None, batch_
         print(f"Accuracy: {stats['accuracy']:.4f}")
         print(f"Mean Confidence: {stats['mean_confidence']:.4f} (±{stats['std_confidence']:.4f})")
         print(f"Error Distribution: {stats['error_distribution']}")
-        print(f"Confusion Analysis:")
+        print("Confusion Analysis:")
         print(f"  Over-confident mistakes: {stats['confusion_distribution']['over_confident']}")
         print(f"  Under-confident correct: {stats['confusion_distribution']['under_confident']}")
 

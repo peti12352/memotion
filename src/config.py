@@ -30,9 +30,15 @@ EMOTION_NAMES = list(EMOTION_CLASSES.keys())
 
 # Training configuration
 BATCH_SIZE = 32
-LEARNING_RATE = 1e-5  # Lower learning rate for ordinal classification
-NUM_EPOCHS = 15
+LEARNING_RATE = 5e-6  # Lower learning rate for more stable training
+NUM_EPOCHS = 30  # Increased epochs for better convergence
 NUM_WORKERS = 2  # Number of workers for data loading
+WARMUP_RATIO = 0.2  # Increased warmup for better stability
+WEIGHT_DECAY = 0.01  # L2 regularization
+GRADIENT_ACCUMULATION_STEPS = 2  # Effective batch size = BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS
+EARLY_STOPPING_PATIENCE = 7  # Increased patience
+FOCAL_ALPHA = 0.75  # Focal loss alpha parameter
+FOCAL_GAMMA = 2.0  # Focal loss gamma parameter
 
 # Paths
 MODELS_DIR = Path("/kaggle/working/outputs/models")
