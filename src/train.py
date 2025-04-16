@@ -5,6 +5,7 @@ import os
 import argparse
 import logging
 import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -75,13 +76,14 @@ def label_smoothing(targets, num_classes, smoothing=0.1):
 
 
 class OrdinalFocalLoss(nn.Module):
-    """Focal Loss variant for ordinal regression with label smoothing"""
+    """Focal Loss variant for ordinal regression with label smoothing and confidence calibration"""
 
-    def __init__(self, alpha=0.75, gamma=2.0, smoothing=0.1):
+    def __init__(self, alpha=0.75, gamma=2.0, smoothing=0.1, confidence_penalty_weight=0.05):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
         self.smoothing = smoothing
+        self.confidence_penalty_weight = confidence_penalty_weight
         self.ce_loss = nn.CrossEntropyLoss(reduction='none')
 
     def forward(self, logits, targets):
@@ -94,7 +96,6 @@ class OrdinalFocalLoss(nn.Module):
 
             # Get both class indices and smoothed targets
             target_indices = torch.argmax(emotion_targets, dim=1)
-            smoothed_targets = label_smoothing(emotion_targets.float(), dim, self.smoothing)
 
             # Calculate standard cross entropy for focal loss
             ce = self.ce_loss(emotion_logits, target_indices)
@@ -103,18 +104,23 @@ class OrdinalFocalLoss(nn.Module):
             pt = torch.exp(-ce)
             focal_loss = self.alpha * (1 - pt) ** self.gamma * ce
 
-            # Calculate additional smooth loss using smoothed targets
-            smooth_loss = -torch.sum(smoothed_targets * torch.log_softmax(emotion_logits, dim=1), dim=1)
-
-            # Combine both losses
-            combined_loss = 0.8 * focal_loss + 0.2 * smooth_loss
-
-            # Add confidence penalty
+            # Add ordinal penalty to encourage ordered predictions
             probs = torch.softmax(emotion_logits, dim=1)
-            confidence_penalty = -0.1 * torch.mean(probs * torch.log(probs + 1e-7))
+            cumsum_probs = torch.cumsum(probs, dim=1)
+            ordinal_penalty = torch.mean(torch.abs(cumsum_probs[:, :-1] - cumsum_probs[:, 1:]))
 
-            total_loss += combined_loss.mean() + confidence_penalty
+            # Calculate confidence calibration loss
+            max_probs, _ = torch.max(probs, dim=1)
+            target_correct = (torch.argmax(emotion_logits, dim=1) == target_indices).float()
+            confidence_error = torch.abs(max_probs - target_correct)
+            calibration_loss = torch.mean(confidence_error)
 
+            # Combine losses with weights
+            combined_loss = (focal_loss.mean() +  # Base focal loss
+                             0.1 * ordinal_penalty +  # Ordinal penalty weight
+                             self.confidence_penalty_weight * calibration_loss)  # Confidence calibration
+
+            total_loss += combined_loss
             start_idx += dim
 
         return total_loss / len(EMOTION_DIMS)
@@ -470,8 +476,11 @@ def train(
         # Save model if validation F1 improves
         if val_metrics['f1'] > best_val_f1:
             best_val_f1 = val_metrics['f1']
-            logger.info(f"Saving best model with val F1: {best_val_f1:.4f}")
-            torch.save({
+            logger.info(f"New best model found! Previous F1: {best_val_f1:.4f} -> New F1: {val_metrics['f1']:.4f}")
+            logger.info(f"Saving model to: {model_save_path}")
+
+            # Save checkpoint with detailed info
+            checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -484,17 +493,23 @@ def train(
                 'train_losses': train_losses,
                 'val_losses': val_losses,
                 'train_f1_scores': train_f1_scores,
-                'val_f1_scores': val_f1_scores
-            }, model_save_path)
+                'val_f1_scores': val_f1_scores,
+                'save_time': time.strftime("%Y-%m-%d %H:%M:%S")
+            }
+            torch.save(checkpoint, model_save_path)
+            logger.info(f"Checkpoint saved successfully at epoch {epoch + 1}")
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
-            logger.info(
-                f"Early stopping counter: {early_stopping_counter}/{early_stopping_patience}"
-            )
-            if early_stopping_counter >= early_stopping_patience:
-                logger.info("Early stopping triggered")
-                break
+            logger.info(f"No improvement in validation F1. Best: {best_val_f1:.4f}, Current: {val_metrics['f1']:.4f}")
+            logger.info(f"Early stopping counter: {early_stopping_counter}/{early_stopping_patience}")
+
+    # At the end of training, load the best model for evaluation
+    logger.info("Loading best model for final evaluation...")
+    checkpoint = torch.load(model_save_path, map_location=device)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    logger.info(f"Loaded checkpoint from epoch {checkpoint['epoch'] + 1} with validation F1: {checkpoint['val_f1']:.4f}")
+    logger.info(f"Checkpoint was saved at: {checkpoint.get('save_time', 'unknown time')}")
 
     # Plot loss evolution
     if output_dir:
