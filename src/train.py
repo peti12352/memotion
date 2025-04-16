@@ -313,8 +313,9 @@ def train(
     scaler = GradScaler() if fp16_training else None
 
     # Initialize early stopping variables
-    best_val_f1 = 0.0
+    best_val_metric = float('inf')  # Initialize with infinity for MAE (lower is better)
     early_stopping_counter = 0
+    best_epoch = -1
 
     # Create lists to store loss history for visualization
     train_losses = []
@@ -470,13 +471,18 @@ def train(
             f"Train Loss: {train_loss:.4f}, "
             f"Train F1: {train_metrics['f1']:.4f}, "
             f"Val Loss: {val_loss:.4f}, "
-            f"Val F1: {val_metrics['f1']:.4f}"
+            f"Val F1: {val_metrics['f1']:.4f}, "
+            f"Val MAE: {val_metrics.get('mae', float('nan')):.4f}"  # Add MAE logging
         )
 
-        # Save model if validation F1 improves
-        if val_metrics['f1'] > best_val_f1:
-            best_val_f1 = val_metrics['f1']
-            logger.info(f"New best model found! Previous F1: {best_val_f1:.4f} -> New F1: {val_metrics['f1']:.4f}")
+        # Calculate validation MAE using the updated metrics calculation
+        val_mae = val_metrics.get('mae', float('inf'))
+
+        # Save model if validation MAE improves
+        if val_mae < best_val_metric:
+            best_val_metric = val_mae
+            best_epoch = epoch + 1
+            logger.info(f"New best model found! Previous MAE: {best_val_metric:.4f} -> New MAE: {val_mae:.4f}")
             logger.info(f"Saving model to: {model_save_path}")
 
             # Save checkpoint with detailed info
@@ -487,7 +493,7 @@ def train(
                 'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
                 'train_loss': train_loss,
                 'val_loss': val_loss,
-                'val_f1': val_metrics['f1'],
+                'val_mae': val_mae,  # Save validation MAE
                 'train_metrics': train_metrics,
                 'val_metrics': val_metrics,
                 'train_losses': train_losses,
@@ -497,18 +503,21 @@ def train(
                 'save_time': time.strftime("%Y-%m-%d %H:%M:%S")
             }
             torch.save(checkpoint, model_save_path)
-            logger.info(f"Checkpoint saved successfully at epoch {epoch + 1}")
+            logger.info(f"Checkpoint saved successfully at epoch {best_epoch}")
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
-            logger.info(f"No improvement in validation F1. Best: {best_val_f1:.4f}, Current: {val_metrics['f1']:.4f}")
+            logger.info(f"No improvement in validation MAE. Best: {best_val_metric:.4f}, Current: {val_mae:.4f}")
             logger.info(f"Early stopping counter: {early_stopping_counter}/{early_stopping_patience}")
+            if early_stopping_counter >= early_stopping_patience:
+                logger.info("Early stopping triggered")
+                break
 
     # At the end of training, load the best model for evaluation
-    logger.info("Loading best model for final evaluation...")
+    logger.info(f"Loading best model from epoch {best_epoch} for final evaluation...")
     checkpoint = torch.load(model_save_path, map_location=device)
     model.load_state_dict(checkpoint['model_state_dict'])
-    logger.info(f"Loaded checkpoint from epoch {checkpoint['epoch'] + 1} with validation F1: {checkpoint['val_f1']:.4f}")
+    logger.info(f"Loaded checkpoint from epoch {checkpoint['epoch'] + 1} with validation MAE: {checkpoint['val_mae']:.4f}")
     logger.info(f"Checkpoint was saved at: {checkpoint.get('save_time', 'unknown time')}")
 
     # Plot loss evolution
@@ -547,7 +556,7 @@ def train(
         except Exception as e:
             logger.error(f"Error creating loss evolution plot: {e}")
 
-    return best_val_f1
+    return best_val_metric
 
 
 def main(args):
@@ -632,7 +641,7 @@ def main(args):
 
     # Start training
     logger.info("Starting training...")
-    best_val_f1 = train(
+    best_val_metric = train(
         train_dataset=train_dataset,
         val_dataset=val_dataset,
         model=model,
@@ -650,7 +659,7 @@ def main(args):
     )
 
     logger.info(
-        f"Training completed with best validation F1: {best_val_f1:.4f}")
+        f"Training completed with best validation MAE: {best_val_metric:.4f}")
 
     # Evaluate on test set
     logger.info("Evaluating final model on test set...")
@@ -802,7 +811,7 @@ def main(args):
 
     logger.info(f"Model card saved to {model_card_path}")
 
-    return best_val_f1
+    return best_val_metric
 
 
 def parse_args():
