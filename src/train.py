@@ -515,10 +515,14 @@ def train(
 
     # At the end of training, load the best model for evaluation
     logger.info(f"Loading best model from epoch {best_epoch} for final evaluation...")
-    checkpoint = torch.load(model_save_path, map_location=device)
+    checkpoint = torch.load(model_save_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
-    logger.info(f"Loaded checkpoint from epoch {checkpoint['epoch'] + 1} with validation MAE: {checkpoint['val_mae']:.4f}")
-    logger.info(f"Checkpoint was saved at: {checkpoint.get('save_time', 'unknown time')}")
+    # Safely access metrics from checkpoint
+    loaded_epoch = checkpoint.get('epoch', -1) + 1
+    loaded_val_mae = checkpoint.get('val_mae', float('nan'))
+    save_time = checkpoint.get('save_time', 'unknown')
+    logger.info(f"Loaded checkpoint from epoch {loaded_epoch} with validation MAE: {loaded_val_mae:.4f}")
+    logger.info(f"Checkpoint was saved at: {save_time}")
 
     # Plot loss evolution
     if output_dir:
