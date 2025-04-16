@@ -133,10 +133,14 @@ def evaluate_model(model_path, kaggle_dataset_path=None, output_dir=None, batch_
     all_preds = []
     all_targets = []
     all_intensities = []
+    total_samples = 0
+    correct_predictions = {emotion: 0 for emotion in EMOTION_NAMES}
+    total_predictions = {emotion: 0 for emotion in EMOTION_NAMES}
 
-    # Store actual values for regression plots
+    # Store actual values for regression plots and detailed analysis
     true_values = {emotion: [] for emotion in EMOTION_NAMES}
     pred_values = {emotion: [] for emotion in EMOTION_NAMES}
+    confidence_scores = {emotion: [] for emotion in EMOTION_NAMES}
 
     logger.info("Running evaluation...")
     with torch.no_grad():
@@ -152,14 +156,29 @@ def evaluate_model(model_path, kaggle_dataset_path=None, output_dir=None, batch_
 
             # Forward pass
             outputs = model(images, text_data)
-
-            # Also get intensity predictions
             intensity_preds = model.predict_intensities(images, text_data)
+
+            # Calculate confidence scores
+            start_idx = 0
+            for i, emotion in enumerate(EMOTION_NAMES):
+                emotion_dim = EMOTION_DIMS[i]
+                emotion_logits = outputs[:, start_idx:start_idx + emotion_dim]
+                probs = torch.softmax(emotion_logits, dim=1)
+                confidence, _ = torch.max(probs, dim=1)
+                confidence_scores[emotion].extend(confidence.cpu().numpy().tolist())
+                start_idx += emotion_dim
+
+                # Count correct predictions
+                pred_intensity = intensity_preds[:, i]
+                true_intensity = intensities[:, i]
+                correct_predictions[emotion] += (pred_intensity == true_intensity).sum().item()
+                total_predictions[emotion] += len(true_intensity)
 
             # Store predictions and targets
             all_preds.append(outputs.cpu())
             all_targets.append(targets.cpu())
             all_intensities.append(intensities.cpu())
+            total_samples += len(batch["image"])
 
             # Store intensity values for each emotion
             for i, emotion in enumerate(EMOTION_NAMES):
@@ -175,41 +194,67 @@ def evaluate_model(model_path, kaggle_dataset_path=None, output_dir=None, batch_
     logger.info("Calculating evaluation metrics...")
     metrics = calculate_ordinal_metrics(all_preds, all_targets, all_intensities)
 
-    # Add true/pred values for plotting
-    metrics['true_values'] = true_values
-    metrics['pred_values'] = pred_values
+    # Add detailed statistics
+    metrics['statistics'] = {
+        'total_samples': total_samples,
+        'per_emotion': {}
+    }
 
-    # Log metrics
-    logger.info(f"Overall Accuracy: {metrics['overall']['accuracy']:.4f}")
-    logger.info(f"Overall F1 Macro: {metrics['overall']['f1_macro']:.4f}")
-    logger.info(f"Overall F1 Weighted: {metrics['overall']['f1_weighted']:.4f}")
-    logger.info(f"Overall MAE: {metrics['overall']['mae']:.4f}")
-    logger.info(f"Overall RMSE: {metrics['overall']['rmse']:.4f}")
-    logger.info(f"Overall Kappa: {metrics['overall']['kappa']:.4f}")
-
-    logger.info("Per-emotion metrics:")
+    # Calculate per-emotion statistics
     for emotion in EMOTION_NAMES:
-        logger.info(f"  {emotion}:")
-        logger.info(f"    Accuracy: {metrics['per_emotion'][emotion]['accuracy']:.4f}")
-        logger.info(f"    F1 Weighted: {metrics['per_emotion'][emotion]['f1_weighted']:.4f}")
-        logger.info(f"    MAE: {metrics['per_emotion'][emotion]['mae']:.4f}")
-        logger.info(f"    Kappa: {metrics['per_emotion'][emotion]['kappa']:.4f}")
+        true_vals = np.array(true_values[emotion])
+        pred_vals = np.array(pred_values[emotion])
+        conf_scores = np.array(confidence_scores[emotion])
 
-    # Save metrics to file if output directory is provided
+        metrics['statistics']['per_emotion'][emotion] = {
+            'accuracy': correct_predictions[emotion] / total_predictions[emotion],
+            'total_predictions': total_predictions[emotion],
+            'correct_predictions': correct_predictions[emotion],
+            'mean_confidence': float(np.mean(conf_scores)),
+            'std_confidence': float(np.std(conf_scores)),
+            'confusion_distribution': {
+                'over_confident': len(np.where((conf_scores > 0.8) & (pred_vals != true_vals))[0]),
+                'under_confident': len(np.where((conf_scores < 0.2) & (pred_vals == true_vals))[0])
+            },
+            'error_distribution': {
+                str(i): int(np.sum(np.abs(true_vals - pred_vals) == i))
+                for i in range(max(EMOTION_DIMS))
+            }
+        }
+
+    # Print detailed metrics
+    print("\n" + "=" * 50)
+    print("QUANTITATIVE EVALUATION RESULTS")
+    print("=" * 50)
+    print(f"\nTotal samples evaluated: {total_samples}")
+
+    for emotion in EMOTION_NAMES:
+        stats = metrics['statistics']['per_emotion'][emotion]
+        print(f"\n{emotion.upper()} METRICS:")
+        print(f"Accuracy: {stats['accuracy']:.4f}")
+        print(f"Mean Confidence: {stats['mean_confidence']:.4f} (±{stats['std_confidence']:.4f})")
+        print(f"Error Distribution: {stats['error_distribution']}")
+        print(f"Confusion Analysis:")
+        print(f"  Over-confident mistakes: {stats['confusion_distribution']['over_confident']}")
+        print(f"  Under-confident correct: {stats['confusion_distribution']['under_confident']}")
+
+    print("\nOVERALL METRICS:")
+    print(f"Accuracy: {metrics['overall']['accuracy']:.4f}")
+    print(f"F1 Weighted: {metrics['overall']['f1_weighted']:.4f}")
+    print(f"MAE: {metrics['overall']['mae']:.4f}")
+    print(f"RMSE: {metrics['overall']['rmse']:.4f}")
+    print("=" * 50 + "\n")
+
+    # Save detailed metrics
     if output_dir:
         output_dir = Path(output_dir)
         output_dir.mkdir(exist_ok=True, parents=True)
-        output_path = output_dir / "test_metrics.json"
-        results = {
-            "overall": metrics['overall'],
-            "per_emotion": metrics['per_emotion'],
-            "model_path": str(model_path)
-        }
 
-        with open(output_path, 'w') as f:
-            json.dump(results, f, indent=2)
-
-        logger.info(f"Evaluation results saved to {output_path}")
+        # Save main metrics
+        metrics_path = output_dir / "test_metrics.json"
+        with open(metrics_path, 'w') as f:
+            json.dump(metrics, f, indent=2)
+        logger.info(f"Detailed metrics saved to {metrics_path}")
 
         # Generate visualizations
         plot_metrics(metrics, output_dir)
