@@ -579,8 +579,11 @@ def main(args):
     model = MemeEmotionModel()
     model = model.to(device)
 
-    # Initialize loss function
-    criterion = PerEmotionCrossEntropyLoss(class_weights=[torch.tensor([1.0] * dim) for dim in EMOTION_DIMS])
+    # Initialize loss function with weights moved to the correct device
+    # Placeholder weights for now, replace with actual calculation if needed
+    # TODO: Implement actual class weight calculation if desired
+    class_weights_list = [torch.tensor([1.0] * dim, device=device) for dim in EMOTION_DIMS]
+    criterion = PerEmotionCrossEntropyLoss(class_weights=class_weights_list)
 
     # Initialize optimizer
     optimizer = optim.AdamW(
@@ -628,7 +631,7 @@ def main(args):
     )
 
     logger.info(
-        f"Training completed with best validation {save_metric.upper()}: {best_val_metric:.4f}")
+        f"Training completed. Best validation metric achieved: {best_val_metric:.4f}")
 
     # Evaluate on test set
     logger.info("Evaluating final model on test set...")
