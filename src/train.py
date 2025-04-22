@@ -416,9 +416,9 @@ def train(
         # Log shapes before metric calculation for debugging
         logger.info(f"Training shapes - predictions: {all_train_preds.shape}, targets: {all_train_targets.shape}, intensities: {all_train_intensities.shape}")
 
-        # Calculate training metrics with raw intensities
-        train_metrics = calculate_metrics(all_train_preds, all_train_targets, all_train_intensities)
-        train_f1_scores.append(train_metrics['f1'])
+        # Calculate training metrics using the detailed ordinal function
+        train_metrics = calculate_ordinal_metrics(all_train_preds, all_train_targets, all_train_intensities)
+        train_f1_scores.append(train_metrics['overall']['f1_macro'])  # Use overall macro F1
 
         # Validation phase
         model.eval()
@@ -462,21 +462,24 @@ def train(
         # Log shapes before metric calculation for debugging
         logger.info(f"Validation shapes - predictions: {all_val_preds.shape}, targets: {all_val_targets.shape}, intensities: {all_val_intensities.shape}")
 
-        # Calculate validation metrics with raw intensities
-        val_metrics = calculate_metrics(all_val_preds, all_val_targets, all_val_intensities)
-        val_f1_scores.append(val_metrics['f1'])
+        # Calculate validation metrics using the detailed ordinal function
+        val_metrics = calculate_ordinal_metrics(all_val_preds, all_val_targets, all_val_intensities)
+        val_f1_scores.append(val_metrics['overall']['f1_macro'])  # Use overall macro F1
 
         # Log metrics
+        train_f1_overall = train_metrics['overall']['f1_macro']
+        val_f1_overall = val_metrics['overall']['f1_macro']
+        val_mae_overall = val_metrics['overall'].get('mae', float('nan'))
         logger.info(
             f"Train Loss: {train_loss:.4f}, "
-            f"Train F1: {train_metrics['f1']:.4f}, "
+            f"Train F1: {train_f1_overall:.4f}, "
             f"Val Loss: {val_loss:.4f}, "
-            f"Val F1: {val_metrics['f1']:.4f}, "
-            f"Val MAE: {val_metrics.get('mae', float('nan')):.4f}"  # Add MAE logging
+            f"Val F1: {val_f1_overall:.4f}, "
+            f"Val MAE: {val_mae_overall:.4f}"  # Log overall MAE
         )
 
         # Calculate validation MAE using the updated metrics calculation
-        val_mae = val_metrics.get('mae', float('inf'))
+        val_mae = val_metrics['overall'].get('mae', float('inf'))  # Access nested MAE
 
         # Save model if validation MAE improves
         if val_mae < best_val_metric:
