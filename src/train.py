@@ -75,68 +75,44 @@ def label_smoothing(targets, num_classes, smoothing=0.1):
     return targets
 
 
-class OrdinalFocalLoss(nn.Module):
-    """Focal Loss variant for ordinal regression with label smoothing and confidence calibration"""
+class PerEmotionCrossEntropyLoss(nn.Module):
+    """Calculates standard CrossEntropyLoss for each emotion head independently."""
 
-    def __init__(self, alpha=0.75, gamma=2.0, smoothing=0.1, confidence_penalty_weight=0.05):
+    def __init__(self, class_weights=None):
         super().__init__()
-        self.alpha = alpha
-        self.gamma = gamma
-        self.smoothing = smoothing
-        self.confidence_penalty_weight = confidence_penalty_weight
-        self.ce_loss = nn.CrossEntropyLoss(reduction='none')
+        # If class_weights are provided, they should be a list of tensors, one per emotion
+        self.weights = class_weights
+        self.ce_losses = nn.ModuleList([
+            nn.CrossEntropyLoss(weight=self.weights[i] if self.weights else None)
+            for i, dim in enumerate(EMOTION_DIMS)
+        ])
 
     def forward(self, logits, targets):
         start_idx = 0
         total_loss = 0
-
         for i, dim in enumerate(EMOTION_DIMS):
             emotion_logits = logits[:, start_idx:start_idx + dim]
-            emotion_targets = targets[:, start_idx:start_idx + dim]
+            emotion_targets_one_hot = targets[:, start_idx:start_idx + dim]
+            # Convert one-hot targets to class indices for CrossEntropyLoss
+            target_indices = torch.argmax(emotion_targets_one_hot, dim=1)
 
-            # Get both class indices and smoothed targets
-            target_indices = torch.argmax(emotion_targets, dim=1)
-
-            # Calculate standard cross entropy for focal loss
-            ce = self.ce_loss(emotion_logits, target_indices)
-
-            # Apply focal loss formulation using hard targets
-            pt = torch.exp(-ce)
-            focal_loss = self.alpha * (1 - pt) ** self.gamma * ce
-
-            # Add ordinal penalty to encourage ordered predictions
-            probs = torch.softmax(emotion_logits, dim=1)
-            cumsum_probs = torch.cumsum(probs, dim=1)
-            ordinal_penalty = torch.mean(torch.abs(cumsum_probs[:, :-1] - cumsum_probs[:, 1:]))
-
-            # Calculate confidence calibration loss
-            max_probs, _ = torch.max(probs, dim=1)
-            target_correct = (torch.argmax(emotion_logits, dim=1) == target_indices).float()
-            confidence_error = torch.abs(max_probs - target_correct)
-            calibration_loss = torch.mean(confidence_error)
-
-            # Combine losses with weights
-            combined_loss = (focal_loss.mean() +  # Base focal loss
-                             0.1 * ordinal_penalty +  # Ordinal penalty weight
-                             self.confidence_penalty_weight * calibration_loss)  # Confidence calibration
-
-            total_loss += combined_loss
+            loss = self.ce_losses[i](emotion_logits, target_indices)
+            total_loss += loss
             start_idx += dim
 
-        return total_loss / len(EMOTION_DIMS)
+        return total_loss / len(EMOTION_DIMS)  # Average loss across emotions
 
 
-def calculate_ordinal_metrics(predictions, targets, raw_intensities):
+def calculate_standard_metrics(predictions, targets, raw_intensities):
     """
-    Calculate metrics for Task C - emotion intensity prediction
-
+    Calculate standard classification metrics per emotion head.
     Args:
         predictions: Model logits [batch_size, sum(EMOTION_DIMS)]
-        targets: One-hot encoded groundtruth [batch_size, sum(EMOTION_DIMS)]
+        targets: One-hot encoded groundtruth [batch_size, sum(EMOTION_DIMS)] - NOT USED directly
         raw_intensities: Raw intensity values [batch_size, len(EMOTION_NAMES)]
 
     Returns:
-        Dictionary with metrics for each emotion and overall average
+        Dictionary with per-emotion accuracy, F1, MAE, etc.
     """
     # Convert tensors to numpy if needed
     if isinstance(predictions, torch.Tensor):
@@ -146,56 +122,33 @@ def calculate_ordinal_metrics(predictions, targets, raw_intensities):
     if isinstance(raw_intensities, torch.Tensor):
         raw_intensities = raw_intensities.cpu().detach().numpy()
 
-    # Convert predictions to intensity levels (0, 1, 2, 3) for each emotion
     pred_intensities = []
     start_idx = 0
     for dim in EMOTION_DIMS:
-        # Get probabilities for each level of this emotion
         emotion_logits = predictions[:, start_idx:start_idx + dim]
-        # Convert to class predictions by taking argmax
         pred_intensity = np.argmax(emotion_logits, axis=1)
         pred_intensities.append(pred_intensity)
         start_idx += dim
-
-    # Stack to get [batch_size, num_emotions] array
     pred_intensities = np.column_stack(pred_intensities)
 
-    # Calculate metrics for each emotion
-    metrics = {'per_emotion': {}}
-    overall_acc = 0
-    overall_f1_macro = 0
-    overall_f1_weighted = 0
-    overall_mae = 0
-    overall_rmse = 0
-    overall_kappa = 0
+    metrics = {'per_emotion': {}, 'overall': {}}
+    all_y_true = []
+    all_y_pred = []
 
     for i, emotion in enumerate(EMOTION_NAMES):
-        # Extract predictions and ground truth for this emotion
         y_pred = pred_intensities[:, i]
         y_true = raw_intensities[:, i]
+        all_y_true.extend(y_true)
+        all_y_pred.extend(y_pred)
 
-        # Classification metrics
         accuracy = accuracy_score(y_true, y_pred)
-
-        # Calculate F1 score only if the emotion has more than 2 classes
-        if EMOTION_DIMS[i] > 2:
-            f1_macro = f1_score(y_true, y_pred, average='macro')
-            f1_weighted = f1_score(y_true, y_pred, average='weighted')
-        else:
-            f1_macro = f1_score(y_true, y_pred, average='binary')
-            f1_weighted = f1_macro
-
-        # Calculate confusion matrix
-        cm = confusion_matrix(y_true, y_pred, labels=range(EMOTION_DIMS[i]))
-
-        # Regression metrics (treating intensities as continuous values)
+        f1_macro = f1_score(y_true, y_pred, average='macro', zero_division=0)
+        f1_weighted = f1_score(y_true, y_pred, average='weighted', zero_division=0)
         mae = mean_absolute_error(y_true, y_pred)
         rmse = np.sqrt(mean_squared_error(y_true, y_pred))
-
-        # Cohen's Kappa (inter-rater agreement)
         kappa = cohen_kappa_score(y_true, y_pred, weights='quadratic')
+        cm = confusion_matrix(y_true, y_pred, labels=range(EMOTION_DIMS[i]))
 
-        # Store metrics for this emotion
         metrics['per_emotion'][emotion] = {
             'accuracy': float(accuracy),
             'f1_macro': float(f1_macro),
@@ -206,24 +159,28 @@ def calculate_ordinal_metrics(predictions, targets, raw_intensities):
             'confusion_matrix': cm.tolist()
         }
 
-        # Accumulate for averages
-        overall_acc += accuracy
-        overall_f1_macro += f1_macro
-        overall_f1_weighted += f1_weighted
-        overall_mae += mae
-        overall_rmse += rmse
-        overall_kappa += kappa
+    # Calculate overall metrics (simple average)
+    overall_acc = np.mean([m['accuracy'] for m in metrics['per_emotion'].values()])
+    overall_f1_macro = np.mean([m['f1_macro'] for m in metrics['per_emotion'].values()])
+    overall_f1_weighted = np.mean([m['f1_weighted'] for m in metrics['per_emotion'].values()])
+    overall_mae = np.mean([m['mae'] for m in metrics['per_emotion'].values()])
+    overall_rmse = np.mean([m['rmse'] for m in metrics['per_emotion'].values()])
+    overall_kappa = np.mean([m['kappa'] for m in metrics['per_emotion'].values()])
 
-    # Calculate averages
-    num_emotions = len(EMOTION_NAMES)
     metrics['overall'] = {
-        'accuracy': overall_acc / num_emotions,
-        'f1_macro': overall_f1_macro / num_emotions,
-        'f1_weighted': overall_f1_weighted / num_emotions,
-        'mae': overall_mae / num_emotions,
-        'rmse': overall_rmse / num_emotions,
-        'kappa': overall_kappa / num_emotions
+        'accuracy': overall_acc,
+        'f1_macro': overall_f1_macro,
+        'f1_weighted': overall_f1_weighted,
+        'mae': overall_mae,
+        'rmse': overall_rmse,
+        'kappa': overall_kappa
     }
+
+    # Add compatibility keys for the old calculate_metrics wrapper if needed
+    metrics["f1"] = overall_f1_macro
+    metrics["per_class"] = {}
+    for i, emotion in enumerate(EMOTION_NAMES):
+        metrics["per_class"][f"class_{i}"] = metrics['per_emotion'][emotion]
 
     return metrics
 
@@ -242,7 +199,7 @@ def calculate_metrics(predictions, targets, raw_intensities=None):
         raw_intensities = torch.zeros((predictions.shape[0], len(EMOTION_NAMES)))
 
     # Use the new ordinal metrics function
-    metrics = calculate_ordinal_metrics(predictions, targets, raw_intensities)
+    metrics = calculate_standard_metrics(predictions, targets, raw_intensities)
 
     # Reformat for backward compatibility
     compat_metrics = {
@@ -313,9 +270,14 @@ def train(
     scaler = GradScaler() if fp16_training else None
 
     # Initialize early stopping variables
-    best_val_metric = float('inf')  # Initialize with infinity for MAE (lower is better)
+    best_val_metric = 0.0  # Using Accuracy or F1 now (higher is better)
     early_stopping_counter = 0
     best_epoch = -1
+    # Define the metric to use for saving the best model
+    save_metric = 'f1_macro'  # Options: 'accuracy', 'f1_macro', 'f1_weighted', 'kappa', 'mae', 'rmse'
+    lower_is_better = save_metric in ['mae', 'rmse']
+    if lower_is_better:
+        best_val_metric = float('inf')
 
     # Create lists to store loss history for visualization
     train_losses = []
@@ -417,7 +379,7 @@ def train(
         logger.info(f"Training shapes - predictions: {all_train_preds.shape}, targets: {all_train_targets.shape}, intensities: {all_train_intensities.shape}")
 
         # Calculate training metrics using the detailed ordinal function
-        train_metrics = calculate_ordinal_metrics(all_train_preds, all_train_targets, all_train_intensities)
+        train_metrics = calculate_standard_metrics(all_train_preds, all_train_targets, all_train_intensities)
         train_f1_scores.append(train_metrics['overall']['f1_macro'])  # Use overall macro F1
 
         # Validation phase
@@ -463,29 +425,30 @@ def train(
         logger.info(f"Validation shapes - predictions: {all_val_preds.shape}, targets: {all_val_targets.shape}, intensities: {all_val_intensities.shape}")
 
         # Calculate validation metrics using the detailed ordinal function
-        val_metrics = calculate_ordinal_metrics(all_val_preds, all_val_targets, all_val_intensities)
+        val_metrics = calculate_standard_metrics(all_val_preds, all_val_targets, all_val_intensities)
         val_f1_scores.append(val_metrics['overall']['f1_macro'])  # Use overall macro F1
 
         # Log metrics
-        train_f1_overall = train_metrics['overall']['f1_macro']
-        val_f1_overall = val_metrics['overall']['f1_macro']
+        train_f1_overall = train_metrics['overall'].get('f1_macro', float('nan'))
+        val_f1_overall = val_metrics['overall'].get('f1_macro', float('nan'))
         val_mae_overall = val_metrics['overall'].get('mae', float('nan'))
+        val_acc_overall = val_metrics['overall'].get('accuracy', float('nan'))
         logger.info(
-            f"Train Loss: {train_loss:.4f}, "
-            f"Train F1: {train_f1_overall:.4f}, "
-            f"Val Loss: {val_loss:.4f}, "
-            f"Val F1: {val_f1_overall:.4f}, "
-            f"Val MAE: {val_mae_overall:.4f}"  # Log overall MAE
+            f"Train Loss: {train_loss:.4f}, Train F1: {train_f1_overall:.4f}, "
+            f"Val Loss: {val_loss:.4f}, Val F1: {val_f1_overall:.4f}, "
+            f"Val Acc: {val_acc_overall:.4f}, Val MAE: {val_mae_overall:.4f}"
         )
 
-        # Calculate validation MAE using the updated metrics calculation
-        val_mae = val_metrics['overall'].get('mae', float('inf'))  # Access nested MAE
+        # Get the current validation metric for comparison
+        current_val_metric = val_metrics['overall'].get(save_metric, float('inf') if lower_is_better else 0.0)
 
-        # Save model if validation MAE improves
-        if val_mae < best_val_metric:
-            best_val_metric = val_mae
+        # Save model based on the chosen metric
+        improved = (current_val_metric < best_val_metric) if lower_is_better else (current_val_metric > best_val_metric)
+
+        if improved:
+            best_val_metric = current_val_metric
             best_epoch = epoch + 1
-            logger.info(f"New best model found! Previous MAE: {best_val_metric:.4f} -> New MAE: {val_mae:.4f}")
+            logger.info(f"New best model found! Best Val {save_metric.upper()}: {best_val_metric:.4f}")
             logger.info(f"Saving model to: {model_save_path}")
 
             # Save checkpoint with detailed info
@@ -500,14 +463,10 @@ def train(
                 'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
                 'train_loss': float(train_loss),
                 'val_loss': float(val_loss),
-                'val_mae': float(val_mae),  # Save validation MAE
-                'train_metrics': safe_train_metrics,  # Save safe metrics
-                'val_metrics': safe_val_metrics,  # Save safe metrics
-                # Keep lists for plotting if needed, but they won't affect loading
-                # 'train_losses': train_losses,
-                # 'val_losses': val_losses,
-                # 'train_f1_scores': train_f1_scores,
-                # 'val_f1_scores': val_f1_scores,
+                'best_val_metric_name': save_metric,
+                'best_val_metric_value': float(best_val_metric),
+                'train_metrics': safe_train_metrics,
+                'val_metrics': safe_val_metrics,
                 'save_time': time.strftime("%Y-%m-%d %H:%M:%S")
             }
             torch.save(checkpoint, model_save_path)
@@ -515,21 +474,21 @@ def train(
             early_stopping_counter = 0
         else:
             early_stopping_counter += 1
-            logger.info(f"No improvement in validation MAE. Best: {best_val_metric:.4f}, Current: {val_mae:.4f}")
+            logger.info(f"No improvement in validation {save_metric.upper()}. Best: {best_val_metric:.4f}, Current: {current_val_metric:.4f}")
             logger.info(f"Early stopping counter: {early_stopping_counter}/{early_stopping_patience}")
             if early_stopping_counter >= early_stopping_patience:
                 logger.info("Early stopping triggered")
                 break
 
-    # At the end of training, load the best model for evaluation
-    logger.info(f"Loading best model from epoch {best_epoch} for final evaluation...")
+    # At the end of training, load the best model for final evaluation
+    logger.info(f"Loading best model from epoch {best_epoch} (based on {save_metric}) for final evaluation...")
     checkpoint = torch.load(model_save_path, map_location=device, weights_only=True)
     model.load_state_dict(checkpoint['model_state_dict'])
-    # Safely access metrics from checkpoint
     loaded_epoch = checkpoint.get('epoch', -1) + 1
-    loaded_val_mae = checkpoint.get('val_mae', float('nan'))
+    loaded_best_val_metric = checkpoint.get('best_val_metric_value', float('nan'))
+    loaded_metric_name = checkpoint.get('best_val_metric_name', 'unknown')
     save_time = checkpoint.get('save_time', 'unknown')
-    logger.info(f"Loaded checkpoint from epoch {loaded_epoch} with validation MAE: {loaded_val_mae:.4f}")
+    logger.info(f"Loaded checkpoint from epoch {loaded_epoch} with best val {loaded_metric_name}: {loaded_best_val_metric:.4f}")
     logger.info(f"Checkpoint was saved at: {save_time}")
 
     # Plot loss evolution
@@ -621,7 +580,7 @@ def main(args):
     model = model.to(device)
 
     # Initialize loss function
-    criterion = OrdinalFocalLoss(alpha=args.focal_alpha, gamma=args.focal_gamma)
+    criterion = PerEmotionCrossEntropyLoss(class_weights=[torch.tensor([1.0] * dim) for dim in EMOTION_DIMS])
 
     # Initialize optimizer
     optimizer = optim.AdamW(
@@ -648,8 +607,6 @@ def main(args):
         f"  Gradient accumulation steps: {args.gradient_accumulation_steps}"
     )
     logger.info(f"  FP16 training: {args.fp16}")
-    logger.info(f"  Focal loss alpha: {args.focal_alpha}")
-    logger.info(f"  Focal loss gamma: {args.focal_gamma}")
 
     # Start training
     logger.info("Starting training...")
@@ -671,7 +628,7 @@ def main(args):
     )
 
     logger.info(
-        f"Training completed with best validation MAE: {best_val_metric:.4f}")
+        f"Training completed with best validation {save_metric.upper()}: {best_val_metric:.4f}")
 
     # Evaluate on test set
     logger.info("Evaluating final model on test set...")
@@ -836,8 +793,6 @@ def parse_args():
     parser.add_argument("--warmup_ratio", type=float, default=0.1)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--patience", type=int, default=3)
-    parser.add_argument("--focal_alpha", type=float, default=0.25)
-    parser.add_argument("--focal_gamma", type=float, default=2.0)
     parser.add_argument("--fp16", action="store_true")
     parser.add_argument("--model_dir", type=str, default=str(MODELS_DIR))
     parser.add_argument("--seed", type=int, default=42)
