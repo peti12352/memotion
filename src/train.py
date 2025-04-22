@@ -489,20 +489,25 @@ def train(
             logger.info(f"Saving model to: {model_save_path}")
 
             # Save checkpoint with detailed info
+            # Convert metrics to basic types for safe loading
+            safe_train_metrics = {k: float(v) if isinstance(v, (torch.Tensor, np.number)) else v for k, v in train_metrics['overall'].items()}
+            safe_val_metrics = {k: float(v) if isinstance(v, (torch.Tensor, np.number)) else v for k, v in val_metrics['overall'].items()}
+
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'scheduler_state_dict': scheduler.state_dict() if scheduler else None,
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'val_mae': val_mae,  # Save validation MAE
-                'train_metrics': train_metrics,
-                'val_metrics': val_metrics,
-                'train_losses': train_losses,
-                'val_losses': val_losses,
-                'train_f1_scores': train_f1_scores,
-                'val_f1_scores': val_f1_scores,
+                'train_loss': float(train_loss),
+                'val_loss': float(val_loss),
+                'val_mae': float(val_mae),  # Save validation MAE
+                'train_metrics': safe_train_metrics,  # Save safe metrics
+                'val_metrics': safe_val_metrics,  # Save safe metrics
+                # Keep lists for plotting if needed, but they won't affect loading
+                # 'train_losses': train_losses,
+                # 'val_losses': val_losses,
+                # 'train_f1_scores': train_f1_scores,
+                # 'val_f1_scores': val_f1_scores,
                 'save_time': time.strftime("%Y-%m-%d %H:%M:%S")
             }
             torch.save(checkpoint, model_save_path)
